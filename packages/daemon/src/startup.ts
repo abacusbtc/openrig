@@ -49,7 +49,9 @@ import { prepareCodexTeamWorkspace } from "./domain/codex-team-workspace.js";
 import { PiResumeAdapter } from "./adapters/pi-resume.js";
 import { OmpResumeAdapter } from "./adapters/omp-resume.js";
 import { AgyRuntimeAdapter } from "./adapters/agy-runtime-adapter.js";
+import { OpencodeRuntimeAdapter } from "./adapters/opencode-runtime-adapter.js";
 import { AgyResumeAdapter } from "./adapters/agy-resume.js";
+import { OpencodeResumeAdapter } from "./adapters/opencode-resume.js";
 import { OMP_PROVIDER_ENV_VARS, OMP_PROVIDER_EXTRA_ENV_VARS } from "./adapters/pi-runner-protocol.js";
 import { RigSpecExporter } from "./domain/rigspec-exporter.js";
 import { PodRepository } from "./domain/pod-repository.js";
@@ -655,7 +657,9 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
   const piStateRoot = nodePath.join(OPENRIG_HOME, "state", "pi");
   const ompStateRoot = nodePath.join(OPENRIG_HOME, "state", "omp");
   const agyStateRoot = nodePath.join(OPENRIG_HOME, "state", "agy");
+  const opencodeStateRoot = nodePath.join(OPENRIG_HOME, "state", "opencode");
   const agyRunnerEntryPath = nodePath.resolve(import.meta.dirname, "./adapters/agy-runner.js");
+  const opencodeRunnerEntryPath = nodePath.resolve(import.meta.dirname, "./adapters/opencode-runner.js");
   const piRunnerEntryPath = nodePath.resolve(import.meta.dirname, "./adapters/pi-runner.js");
   // OPR.0.7.0.2: Pi seats report cost facts from persisted entries only while usage.pi_cost_facts is on;
   // read at each launch and resume, so the switch takes effect at the next one.
@@ -684,6 +688,12 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
     { stateRoot: agyStateRoot, runnerEntryPath: agyRunnerEntryPath },
     { seatLaunchEnvironment },
   );
+  const opencodeResume = new OpencodeResumeAdapter(
+    tmuxAdapter,
+    { readFile: (p: string) => fs.readFileSync(p, "utf-8"), writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"), exists: (p: string) => fs.existsSync(p), mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }) },
+    { stateRoot: opencodeStateRoot, runnerEntryPath: opencodeRunnerEntryPath },
+    { seatLaunchEnvironment },
+  );
   // Services infrastructure (RigEnv) — created early so restore/bootstrap can use it
   const { ComposeServicesAdapter } = await import("./adapters/compose-services-adapter.js");
   const { ServiceOrchestrator } = await import("./domain/service-orchestrator.js");
@@ -692,7 +702,7 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
 
   const restoreOrchestrator = new RestoreOrchestrator({
     db, rigRepo, sessionRegistry, eventBus, snapshotRepo, snapshotCapture,
-    checkpointStore, nodeLauncher, tmuxAdapter, claudeResume, codexResume, piResume, ompResume, agyResume,
+    checkpointStore, nodeLauncher, tmuxAdapter, claudeResume, codexResume, piResume, ompResume, agyResume, opencodeResume,
     transcriptStore, serviceOrchestrator,
   });
 
@@ -845,6 +855,7 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
   // agy (Antigravity CLI): runner-in-a-pane over stream-json. Unlike OMP it keeps the operator's HOME
   // (the OAuth login lives there); seat state roots under agyStateRoot.
   const agyAdapter = new AgyRuntimeAdapter({ tmux: tmuxAdapter, seatLaunchEnvironment, fsOps: { readFile: (p: string) => fs.readFileSync(p, "utf-8"), writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"), exists: (p: string) => fs.existsSync(p), mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }), listFiles: (dir: string) => { const r: string[] = []; /** Collect relative file paths recursively. */ function w(d: string, pre: string) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) w(nodePath.join(d, e.name), nodePath.join(pre, e.name)); else r.push(pre ? nodePath.join(pre, e.name) : e.name); } } w(dir, ""); return r; }, statMode: (p: string) => fs.statSync(p).mode, chmod: (p: string, m: number) => fs.chmodSync(p, m) }, stateRoot: agyStateRoot, runnerEntryPath: agyRunnerEntryPath });
+  const opencodeAdapter = new OpencodeRuntimeAdapter({ tmux: tmuxAdapter, seatLaunchEnvironment, fsOps: { readFile: (p: string) => fs.readFileSync(p, "utf-8"), writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"), exists: (p: string) => fs.existsSync(p), mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }), listFiles: (dir: string) => { const r: string[] = []; /** Collect relative file paths recursively. */ function w(d: string, pre: string) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) w(nodePath.join(d, e.name), nodePath.join(pre, e.name)); else r.push(pre ? nodePath.join(pre, e.name) : e.name); } } w(dir, ""); return r; }, statMode: (p: string) => fs.statSync(p).mode, chmod: (p: string, m: number) => fs.chmodSync(p, m) }, stateRoot: opencodeStateRoot, runnerEntryPath: opencodeRunnerEntryPath });
   // OPR.0.5.1.1 — the stub runtime adapter (Pi-shaped node-script runner in a pane).
   // Same fsOps shape as Pi; the compiled runner entry lives in the daemon dist.
   const { StubRuntimeAdapter } = await import("./adapters/stub-runtime-adapter.js");
@@ -1031,7 +1042,7 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
     db, rigRepo, podRepo,
     sessionRegistry, eventBus, nodeLauncher, startupOrchestrator,
     fsOps: { readFile: (p: string) => fs.readFileSync(p, "utf-8"), exists: (p: string) => fs.existsSync(p) },
-    adapters: { "claude-code": claudeAdapter, "codex": codexAdapter, "pi": piAdapter, "omp": ompAdapter, "agy": agyAdapter, "stub": stubAdapter, "terminal": new (await import("./adapters/terminal-adapter.js")).TerminalAdapter() },
+    adapters: { "claude-code": claudeAdapter, "codex": codexAdapter, "pi": piAdapter, "omp": ompAdapter, "agy": agyAdapter, "opencode": opencodeAdapter, "stub": stubAdapter, "terminal": new (await import("./adapters/terminal-adapter.js")).TerminalAdapter() },
     tmuxAdapter,
     agentImageLibrary,
     continuityPolicyMaterializer,
@@ -1184,6 +1195,7 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
     piRunnerStateStore: piAdapter,
     ompRunnerStateStore: ompAdapter,
     agyRunnerStateStore: agyAdapter,
+    opencodeRunnerStateStore: opencodeAdapter,
   });
   const selfAttachService = new SelfAttachService({
     db, rigRepo, podRepo, sessionRegistry, eventBus, tmuxAdapter, transcriptStore,
@@ -1255,6 +1267,7 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
     "pi": piAdapter,
     "omp": ompAdapter,
     "agy": agyAdapter,
+    "opencode": opencodeAdapter,
     "stub": stubAdapter,
     "terminal": new (await import("./adapters/terminal-adapter.js")).TerminalAdapter(),
   };

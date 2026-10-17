@@ -9,7 +9,7 @@
 // actually resume" probe is intentionally out of scope (heavy + must not
 // mutate live state); format validation is the safe, side-effect-free floor.
 
-export type ResumeType = "claude_id" | "codex_id" | "pi_session_file" | "omp_session_file" | "agy_conversation_id";
+export type ResumeType = "claude_id" | "codex_id" | "pi_session_file" | "omp_session_file" | "agy_conversation_id" | "opencode_session_id";
 
 export interface ResumeTokenValidationOk {
   ok: true;
@@ -49,6 +49,7 @@ export function resumeTypeForRuntime(runtime: string | null): ResumeType | null 
   if (runtime === "pi") return "pi_session_file";
   if (runtime === "omp") return "omp_session_file";
   if (runtime === "agy") return "agy_conversation_id";
+  if (runtime === "opencode") return "opencode_session_id";
   return null;
 }
 
@@ -74,6 +75,16 @@ function validateAgyConversationToken(token: string): ResumeTokenValidationOk | 
     return { ok: false, error: "agy conversation token must be a conversation id (a UUID such as 01234567-89ab-4def-8123-456789abcdef)." };
   }
   return { ok: true, resumeType: "agy_conversation_id", token };
+}
+
+// opencode session ids (`ses_...`) reach ACP `session/resume`, so only the exact shape is accepted.
+const OPENCODE_SESSION_ID_RE = /^ses_[A-Za-z0-9]{8,64}$/;
+
+function validateOpencodeSessionToken(token: string): ResumeTokenValidationOk | ResumeTokenValidationErr {
+  if (!OPENCODE_SESSION_ID_RE.test(token)) {
+    return { ok: false, error: "opencode session token must be a session id (ses_ followed by letters and digits)." };
+  }
+  return { ok: true, resumeType: "opencode_session_id", token };
 }
 
 function validateSessionFileToken(resumeType: "pi_session_file" | "omp_session_file", token: string): ResumeTokenValidationOk | ResumeTokenValidationErr {
@@ -107,7 +118,7 @@ export function validateResumeToken(
   if (!resumeType) {
     return {
       ok: false,
-      error: `set-resume-token is not supported for runtime "${runtime ?? "unknown"}" (only claude-code, codex, pi, omp, and agy have resume tokens).`,
+      error: `set-resume-token is not supported for runtime "${runtime ?? "unknown"}" (only claude-code, codex, pi, omp, agy, and opencode have resume tokens).`,
     };
   }
   if (typeof rawToken !== "string") {
@@ -121,5 +132,6 @@ export function validateResumeToken(
     return validateSessionFileToken(resumeType, token);
   }
   if (resumeType === "agy_conversation_id") return validateAgyConversationToken(token);
+  if (resumeType === "opencode_session_id") return validateOpencodeSessionToken(token);
   return validateIdShapedToken(resumeType, token);
 }

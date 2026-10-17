@@ -37,6 +37,10 @@ export interface ResumeTokenCaptureDeps {
   ompRunnerStateStore?: {
     readSessionFile(sessionName: string): { ok: true; sessionFile: string } | { ok: false; reason: string };
   } | null;
+  /** Reads the opencode runner sidecar; its `sessionFile` slot carries the opencode session id. */
+  opencodeRunnerStateStore?: {
+    readSessionFile(sessionName: string): { ok: true; sessionFile: string } | { ok: false; reason: string };
+  } | null;
   /** Reads the agy runner sidecar; its `sessionFile` slot carries the agy conversation id. */
   agyRunnerStateStore?: {
     readSessionFile(sessionName: string): { ok: true; sessionFile: string } | { ok: false; reason: string };
@@ -115,8 +119,8 @@ export async function deriveResumeToken(
       return { outcome: "skipped", reason: "process_unreadable" };
     }
     if (!token) return { outcome: "skipped", reason: "probe_timeout" };
-  } else if (runtime === "pi" || runtime === "omp" || runtime === "agy") {
-    const stateStore = runtime === "pi" ? deps.piRunnerStateStore : runtime === "omp" ? deps.ompRunnerStateStore : deps.agyRunnerStateStore;
+  } else if (runtime === "pi" || runtime === "omp" || runtime === "agy" || runtime === "opencode") {
+    const stateStore = runtime === "pi" ? deps.piRunnerStateStore : runtime === "omp" ? deps.ompRunnerStateStore : runtime === "opencode" ? deps.opencodeRunnerStateStore : deps.agyRunnerStateStore;
     if (!stateStore) return { outcome: "noop" }; // dep absent — silent no-op
     const state = stateStore.readSessionFile(input.sessionName);
     if (!state.ok) {
