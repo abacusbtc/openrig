@@ -19,6 +19,8 @@ import { observeAgyPermission } from "../domain/permission-drift.js";
 
 export { type ResumeResult };
 
+const SHELL_COMMANDS = new Set(["bash", "fish", "nu", "sh", "tmux", "zsh"]);
+
 export interface AgyResumeFsOps {
   readFile(path: string): string;
   writeFile(path: string, content: string): void;
@@ -108,6 +110,8 @@ export class AgyResumeAdapter {
     const maxWaitMs = this.options.maxWaitMs ?? 30_000;
     const sleepFn = this.options.sleep ?? sleep;
     const attempts = Math.max(1, Math.floor(maxWaitMs / Math.max(pollMs, 1)) + 1);
+    const shellGraceAttempts = Math.min(12, Math.floor(attempts / 2));
+    let atShellInARow = 0;
 
     for (let attempt = 0; attempt < attempts; attempt++) {
       const { runnerStatePath } = agySeatPaths(this.paths.stateRoot, tmuxSessionName);
@@ -128,6 +132,21 @@ export class AgyResumeAdapter {
             return { ok: false, code: "resume_failed", message: "agy resume failed: the runner is ready but does not report the requested conversation" };
           }
           return { ok: true };
+        }
+      }
+      // A runner that died before writing its own sidecar leaves only our pending record; a pane
+      // that stays at a shell after the grace period means nothing is running, so fail now.
+      if (attempt >= shellGraceAttempts) {
+        const paneCommand = ((await this.tmux.getPaneCommand(tmuxSessionName)) ?? "").replace(/^-/, "");
+        atShellInARow = SHELL_COMMANDS.has(paneCommand) ? atShellInARow + 1 : 0;
+        if (atShellInARow >= 2) {
+          const paneContent = (await this.tmux.capturePaneContent(tmuxSessionName, 40)) ?? "";
+          return {
+            ok: false,
+            code: "resume_failed",
+            message: "agy resume failed: the pane returned to a shell before the runner reported ready",
+            evidence: paneContent.split("\n").slice(-12).join("\n"),
+          } as ResumeResult;
         }
       }
       if (attempt < attempts - 1) await sleepFn(pollMs);

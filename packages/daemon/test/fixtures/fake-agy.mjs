@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Fake agy for runner integration tests: speaks the stream-json protocol agy 1.4.0 does.
-// Each spawn's argv is appended to spawns.log in its cwd (the runner strips the env, by design). A message containing "hang" never answers
+// Each spawn's argv is appended to spawns.log in its cwd (the runner strips the env, by design). A message containing "stubborn" also ignores SIGINT thereafter. A message containing "hang" never answers
 // (so SIGINT can be tested); "deny" ends with a denied_actions result; "die" exits non-zero.
 import fs from "node:fs";
 import readline from "node:readline";
@@ -20,6 +20,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const msg = JSON.parse(line);
   const text = msg.message.content;
   out({ event: "step_update", step_update: { conversation_id: conv, step_index: step++, state: "DONE", step_type: "user_input" } });
+  if (text.includes("stubborn")) { process.removeAllListeners("SIGINT"); process.on("SIGINT", () => {}); hanging = true; return; }
   if (text.includes("hang")) { hanging = true; return; }
   if (text.includes("die")) process.exit(3);
   const i = step++;

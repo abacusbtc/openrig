@@ -163,6 +163,9 @@ export interface AgyRunnerIdentity {
 
 export const AGY_MAX_QUEUED_TURNS = 100;
 export const AGY_INIT_TIMEOUT_MS = 90_000;
+/** An interrupt that agy has not honoured by exiting escalates: SIGTERM after this long, SIGKILL after the next. */
+export const AGY_INTERRUPT_TERM_MS = 5_000;
+export const AGY_INTERRUPT_KILL_MS = 10_000;
 
 export class AgyRunnerCore {
   phase: AgyPhase = "starting";
@@ -176,6 +179,8 @@ export class AgyRunnerCore {
   private clockMs: number;
   private lastTurnAt: string | undefined;
   private turnDenied: AgyDeniedAction[] = [];
+  private interruptedAtMs = 0;
+  private escalation: 0 | 1 | 2 = 0;
 
   constructor(
     private readonly io: AgyRunnerIo,
@@ -259,6 +264,22 @@ export class AgyRunnerCore {
   /** Called periodically: bounds how long the first `init` may take. */
   onTick(nowMs: number): void {
     this.clockMs = nowMs;
+    if (this.phase === "interrupting") {
+      // SIGINT is a request. agy (or a tool it is blocked in) can ignore it, which would wedge the seat
+      // in "interrupting" forever, so escalate to SIGTERM and then SIGKILL until the process is gone.
+      const waited = nowMs - this.interruptedAtMs;
+      if (this.escalation < 2 && waited >= AGY_INTERRUPT_KILL_MS) {
+        this.escalation = 2;
+        this.closeLine();
+        this.io.mirrorLine("[agy-runner] agy ignored SIGTERM; killing it");
+        this.io.signalChild("SIGKILL");
+      } else if (this.escalation < 1 && waited >= AGY_INTERRUPT_TERM_MS) {
+        this.escalation = 1;
+        this.closeLine();
+        this.io.mirrorLine("[agy-runner] agy did not stop on SIGINT; sending SIGTERM");
+        this.io.signalChild("SIGTERM");
+      }
+    }
     if (this.phase === "starting" && nowMs - this.startedAtMs > AGY_INIT_TIMEOUT_MS) {
       this.io.signalChild("SIGTERM");
       this.fail(null, `agy did not report init within ${AGY_INIT_TIMEOUT_MS / 1000}s`);
@@ -367,6 +388,8 @@ export class AgyRunnerCore {
     this.closeLine();
     this.io.mirrorLine("[agy-runner] interrupting the current turn");
     this.phase = "interrupting";
+    this.interruptedAtMs = this.clockMs;
+    this.escalation = 0;
     this.io.signalChild("SIGINT");
   }
 

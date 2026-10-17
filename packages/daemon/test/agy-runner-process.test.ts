@@ -95,6 +95,20 @@ describe("agy-runner process", () => {
     expect(p.exitCode).toBeNull();
   });
 
+  it("unwedges a seat whose agy ignores SIGINT by escalating to SIGTERM", async () => {
+    const p = startRunner();
+    await until(() => sidecar()?.ready === true, "ready");
+    p.stdin.write("stubborn work\n");
+    await until(() => sidecar()?.busy === true, "busy");
+    p.stdin.write("/abort\n");
+    await until(() => output.includes("did not stop on SIGINT; sending SIGTERM"), "escalation notice", 12000);
+    await until(() => spawns().length === 2, "respawn after the forced stop", 6000);
+    expect(spawns()[1]).toEqual(expect.arrayContaining(["--conversation", CONV]));
+    await until(() => sidecar()?.ready === true && sidecar()?.busy === false, "ready again");
+    p.stdin.write("back in business\n");
+    await until(() => output.includes("echo:back in business"), "turn after forced stop");
+  }, 30000);
+
   it("resumes a requested conversation and passes it to agy", async () => {
     startRunner(["--conversation", CONV]);
     await until(() => sidecar()?.ready === true, "ready");

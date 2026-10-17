@@ -139,6 +139,37 @@ describe("AgyRuntimeAdapter.launchHarness", () => {
     expect((result as { evidence?: string }).evidence).toContain("not found on PATH");
   });
 
+  it("fails fast, with pane evidence, when the pane returns to a shell before the runner ever reports", async () => {
+    const fs = memFs();
+    let polls = 0;
+    const tmux = mockTmux({
+      getPaneCommand: vi.fn(async () => (++polls > 0 ? "zsh" : "node")),
+      capturePaneContent: vi.fn(async () => "bash: node: command not found"),
+    });
+    const result = await adapterWith(fs, tmux).launchHarness(binding(), { name: "x" });
+    expect(result).toMatchObject({ ok: false, recovery: "attention_required" });
+    expect((result as { error: string }).error).toContain("returned to a shell");
+    expect((result as { evidence?: string }).evidence).toContain("command not found");
+    // 12 grace attempts + 2 observations, well short of the 120-attempt timeout.
+    expect(polls).toBeLessThan(20);
+  });
+
+  it("does not fail fast while the pane is running the runner", async () => {
+    const fs = memFs();
+    let n = 0;
+    const tmux = mockTmux({
+      sendShellCommand: vi.fn(async (_t: string, cmd: string) => {
+        const id = launchIdFrom(cmd);
+        // The runner reports ready only after many polls; the pane is a node process throughout.
+        setTimeout(() => {}, 0);
+        fs.files[SIDECAR] = state({ ready: false, launchId: id });
+        return { ok: true as const };
+      }),
+      getPaneCommand: vi.fn(async () => { if (++n === 30) fs.files[SIDECAR] = state({ ready: true, launchId: "L1", conversationId: CONV }); return "node"; }),
+    });
+    expect(await adapterWith(fs, tmux).launchHarness(binding(), { name: "x" })).toMatchObject({ ok: true, resumeToken: CONV });
+  });
+
   it("passes the posture and a validated resume conversation to the runner", async () => {
     const fs = memFs();
     const tmux = runnerThatWrites(fs, (id) => state({ ready: true, launchId: id, conversationId: CONV }));
@@ -212,6 +243,12 @@ describe("AgyRuntimeAdapter.checkReady", () => {
   it("a stale READY marker at a shell is not ready", async () => {
     const tmux = mockTmux({ capturePaneContent: vi.fn(async () => "[agy-runner] READY x"), getPaneCommand: vi.fn(async () => "bash") });
     expect(await adapterWith(memFs(), tmux).checkReady(binding())).toMatchObject({ ready: false, code: "runner_exited" });
+  });
+  it("treats a login shell's dashed name (-bash) as a shell", async () => {
+    const tmux = mockTmux({ getPaneCommand: vi.fn(async () => "-bash") });
+    expect(await adapterWith(memFs({ [SIDECAR]: ready() }), tmux).checkReady(binding())).toMatchObject({ ready: false, code: "runner_exited" });
+    const stale = mockTmux({ capturePaneContent: vi.fn(async () => "[agy-runner] READY x"), getPaneCommand: vi.fn(async () => "-zsh") });
+    expect(await adapterWith(memFs(), stale).checkReady(binding())).toMatchObject({ ready: false, code: "runner_exited" });
   });
   it("not ready without a tmux session or a live session", async () => {
     expect(await adapterWith(memFs(), mockTmux()).checkReady(binding({ tmuxSession: undefined as unknown as string }))).toMatchObject({ ready: false });
@@ -374,6 +411,14 @@ describe("AgyResumeAdapter", () => {
     const result = await resumeWith(fs, tmux, 5).resume(SESSION, "agy_conversation_id", CONV, "/work");
     expect(result).toMatchObject({ ok: false, code: "resume_failed" });
     expect((result as { message: string }).message).toContain("timed out");
+  });
+
+  it("fails fast when the pane returns to a shell before the resumed runner reports", async () => {
+    const tmux = mockTmux({ getPaneCommand: vi.fn(async () => "-bash"), capturePaneContent: vi.fn(async () => "Error: Cannot find module") });
+    const result = await resumeWith(memFs(), tmux, 10_000).resume(SESSION, "agy_conversation_id", CONV, "/work");
+    expect(result).toMatchObject({ ok: false, code: "resume_failed" });
+    expect((result as { message: string }).message).toContain("returned to a shell");
+    expect((result as { evidence?: string }).evidence).toContain("Cannot find module");
   });
 
   it("refuses a missing or malformed token and a command that cannot be typed", async () => {

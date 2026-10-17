@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  AgyRunnerCore, AGY_INIT_TIMEOUT_MS, AGY_MAX_QUEUED_TURNS, agyWorkspaceTrustNotice, deniedActionsNotice,
+  AgyRunnerCore, AGY_INIT_TIMEOUT_MS, AGY_INTERRUPT_KILL_MS, AGY_INTERRUPT_TERM_MS, AGY_MAX_QUEUED_TURNS, agyWorkspaceTrustNotice, deniedActionsNotice,
   mapAgyStepUpdate, parseAgyRunnerArgs, summarizeToolParams, type AgyRunnerIo,
 } from "../src/adapters/agy-runner.js";
 import type { AgyRunnerState } from "../src/adapters/agy-runner-protocol.js";
@@ -313,6 +313,68 @@ describe("AgyRunnerCore interrupt", () => {
     h.core.onPaneInput("/abort");
     expect(h.signals).toEqual(["SIGINT"]);
     expect(h.text()).toContain("already interrupting");
+  });
+});
+
+describe("AgyRunnerCore interrupt escalation", () => {
+  function busyThenAbort() {
+    const h = harness();
+    h.core.start();
+    h.init();
+    h.core.onPaneInput("hung work");
+    h.core.onTick(2000);
+    h.core.onPaneInput("/abort");
+    return h;
+  }
+  it("does nothing while agy is still within the grace period", () => {
+    const h = busyThenAbort();
+    h.core.onTick(2000 + AGY_INTERRUPT_TERM_MS - 1);
+    expect(h.signals).toEqual(["SIGINT"]);
+  });
+  it("sends SIGTERM when agy ignores SIGINT, then SIGKILL, each once", () => {
+    const h = busyThenAbort();
+    h.core.onTick(2000 + AGY_INTERRUPT_TERM_MS);
+    expect(h.signals).toEqual(["SIGINT", "SIGTERM"]);
+    h.core.onTick(2000 + AGY_INTERRUPT_TERM_MS + 2000);
+    expect(h.signals).toEqual(["SIGINT", "SIGTERM"]);
+    h.core.onTick(2000 + AGY_INTERRUPT_KILL_MS);
+    expect(h.signals).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
+    h.core.onTick(2000 + AGY_INTERRUPT_KILL_MS + 4000);
+    expect(h.signals).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
+    expect(h.text()).toContain("did not stop on SIGINT");
+    expect(h.text()).toContain("ignored SIGTERM; killing it");
+  });
+  it("jumps straight to SIGKILL if the first tick after the deadline is late", () => {
+    const h = busyThenAbort();
+    h.core.onTick(2000 + AGY_INTERRUPT_KILL_MS + 1);
+    expect(h.signals).toEqual(["SIGINT", "SIGKILL"]);
+  });
+  it("still recovers: once the killed process exits, the seat respawns on the same conversation", () => {
+    const h = busyThenAbort();
+    h.core.onTick(2000 + AGY_INTERRUPT_KILL_MS);
+    h.core.onChildExit(null);
+    expect(h.spawns).toEqual([undefined, CONV]);
+    expect(h.core.phase).toBe("starting");
+    expect(h.exitCode).toBeUndefined();
+  });
+  it("does not escalate once the process exited and the seat is back to normal", () => {
+    const h = busyThenAbort();
+    h.core.onChildExit(1);
+    h.init();
+    h.core.onTick(2000 + AGY_INTERRUPT_KILL_MS * 3);
+    expect(h.signals).toEqual(["SIGINT"]);
+  });
+  it("a second interrupt later restarts the escalation clock", () => {
+    const h = busyThenAbort();
+    h.core.onChildExit(1);
+    h.init();
+    h.core.onPaneInput("more work");
+    h.core.onTick(100_000);
+    h.core.onPaneInput("/abort");
+    h.core.onTick(100_000 + AGY_INTERRUPT_TERM_MS - 1);
+    expect(h.signals.filter((s) => s === "SIGTERM")).toHaveLength(0);
+    h.core.onTick(100_000 + AGY_INTERRUPT_TERM_MS);
+    expect(h.signals.filter((s) => s === "SIGTERM")).toHaveLength(1);
   });
 });
 

@@ -262,7 +262,8 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
     // A sidecar or scrollback marker can outlive the runner process, so a ready signal counts only
     // while the pane's foreground process is not back at a shell.
     const paneCommand = (await this.tmux.getPaneCommand(binding.tmuxSession)) ?? "";
-    const atShell = SHELL_COMMANDS.has(paneCommand);
+    // A login shell reports its name with a leading dash ("-bash").
+    const atShell = SHELL_COMMANDS.has(paneCommand.replace(/^-/, ""));
     const state = this.readRunnerState(binding.tmuxSession);
     if (state?.exited) {
       return { ready: false, reason: `agy-runner exited (code ${state.exited.code ?? "unknown"})`, code: "runner_exited" };
@@ -308,6 +309,8 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
     const pollMs = 250;
     // agy emits `init` right at startup; the longer budget covers a cold start of the agy binary.
     const attempts = 120; // ~30s
+    const shellGraceAttempts = 12; // ~3s for the typed command to become the node process
+    let atShellInARow = 0;
     for (let attempt = 0; attempt < attempts; attempt++) {
       const state = this.readRunnerState(sessionName);
       if (state?.launchId === launchId) {
@@ -324,6 +327,25 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
           };
         }
         if (state.ready) return { ok: true, value: state };
+      }
+      // The runner can die before it ever writes its own sidecar (node missing, bad entry path, a
+      // shell syntax error), leaving only our pending record. A pane that stays at a shell after the
+      // grace period means nothing is running, so fail now instead of waiting out the full timeout.
+      if (attempt >= shellGraceAttempts) {
+        const paneCommand = ((await this.tmux.getPaneCommand(sessionName)) ?? "").replace(/^-/, "");
+        atShellInARow = SHELL_COMMANDS.has(paneCommand) ? atShellInARow + 1 : 0;
+        if (atShellInARow >= 2) {
+          const paneContent = (await this.tmux.capturePaneContent(sessionName, 40)) ?? "";
+          return {
+            ok: false,
+            failure: {
+              ok: false,
+              error: "agy launch failed: the pane returned to a shell before the runner reported ready",
+              recovery: "attention_required",
+              evidence: paneContent.split("\n").slice(-12).join("\n"),
+            },
+          };
+        }
       }
       if (attempt < attempts - 1) await this.sleep(pollMs);
     }
