@@ -246,6 +246,11 @@ describe("OpencodeRuntimeAdapter.checkReady", () => {
     expect(await adapterWith(memFs(), pane("[opencode-runner] EXITED")).checkReady(binding())).toMatchObject({ code: "runner_exited" });
     expect(await adapterWith(memFs(), pane("")).checkReady(binding())).toMatchObject({ code: "awaiting_runtime" });
   });
+  it("a restarting runner (sidecar not ready) is not ready despite an old READY line in scrollback", async () => {
+    const tmux = mockTmux({ capturePaneContent: vi.fn(async () => "[opencode-runner] READY session x\n[opencode-runner] cancelled; restarting") });
+    const r = await adapterWith(memFs({ [SIDECAR]: state({ ready: false, launchId: "L", sessionId: CONV }) }), tmux).checkReady(binding());
+    expect(r).toMatchObject({ ready: false, code: "awaiting_runtime" });
+  });
   it("a stale READY marker at a shell is not ready", async () => {
     const tmux = mockTmux({ capturePaneContent: vi.fn(async () => "[opencode-runner] READY x"), getPaneCommand: vi.fn(async () => "bash") });
     expect(await adapterWith(memFs(), tmux).checkReady(binding())).toMatchObject({ ready: false, code: "runner_exited" });

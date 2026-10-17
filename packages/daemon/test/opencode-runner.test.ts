@@ -328,6 +328,35 @@ describe("OpencodeRunnerCore cancel", () => {
     expect(h.text()).toContain(`opencode restarted on session ${SID}`);
   });
 
+  it("resumes the session when the cancelled answer races the forced stop", () => {
+    const h = harness();
+    h.handshake();
+    h.core.onPaneInput("stubborn");
+    h.core.onTick(2000);
+    h.core.onPaneInput("/abort");
+    h.core.onTick(2000 + OPENCODE_CANCEL_TERM_MS);
+    expect(h.signals).toEqual(["SIGTERM"]);
+    h.finishPrompt("cancelled");
+    expect(h.core.phase).toBe("idle");
+    h.core.onChildExit(143);
+    expect(h.core.phase).toBe("starting");
+    expect(h.spawns).toBe(2);
+    expect(h.exitCode).toBeUndefined();
+  });
+
+  it("refuses a permission request that arrives after /abort", () => {
+    const h = harness();
+    h.handshake();
+    h.core.onPaneInput("x");
+    h.core.onPaneInput("/abort");
+    h.askPermission(41);
+    expect(h.replies(41)[0]).toMatchObject({ result: { outcome: { outcome: "cancelled" } } });
+    expect(h.core.waitingPermissions).toBe(0);
+    expect(h.text()).not.toContain("PERMISSION");
+    h.core.onPaneInput("/allow");
+    expect(h.replies(41)).toHaveLength(1);
+  });
+
   it("answers waiting permission requests cancelled when the turn is cancelled", () => {
     const h = harness();
     h.handshake();

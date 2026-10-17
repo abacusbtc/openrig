@@ -210,6 +210,8 @@ export class OpencodeRunnerCore {
   private lastTurnAt: string | undefined;
   private cancelledAtMs = 0;
   private cancelEscalation: 0 | 1 | 2 = 0;
+  /** Set once the runner has signalled the child itself, so its exit is an expected stop even if the cancelled prompt answered first. */
+  private signalledChild = false;
 
   constructor(
     private readonly io: OpencodeRunnerIo,
@@ -282,8 +284,9 @@ export class OpencodeRunnerCore {
   /** The opencode child exited (or was killed). */
   onChildExit(code: number | null): void {
     if (this.phase === "exited") return;
-    if (this.phase === "cancelling" && this.sessionId && this.ready) {
-      // opencode ignored the cancel and had to be signalled: resume the same session.
+    if ((this.phase === "cancelling" || this.signalledChild) && this.sessionId && this.ready) {
+      // opencode ignored the cancel and had to be signalled (its cancelled answer may have raced the
+      // signal and returned the runner to idle): resume the same session.
       this.closeLine();
       this.io.mirrorLine("[opencode-runner] cancelled; restarting opencode on the same session");
       this.respawnOnSession();
@@ -300,11 +303,13 @@ export class OpencodeRunnerCore {
       const waited = nowMs - this.cancelledAtMs;
       if (this.cancelEscalation < 2 && waited >= OPENCODE_CANCEL_KILL_MS) {
         this.cancelEscalation = 2;
+        this.signalledChild = true;
         this.closeLine();
         this.io.mirrorLine("[opencode-runner] opencode ignored SIGTERM; killing it");
         this.io.signalChild("SIGKILL");
       } else if (this.cancelEscalation < 1 && waited >= OPENCODE_CANCEL_TERM_MS) {
         this.cancelEscalation = 1;
+        this.signalledChild = true;
         this.closeLine();
         this.io.mirrorLine("[opencode-runner] opencode did not honour the cancel; sending SIGTERM");
         this.io.signalChild("SIGTERM");
@@ -495,6 +500,7 @@ export class OpencodeRunnerCore {
 
   private respawnOnSession(): void {
     this.ready = false;
+    this.signalledChild = false;
     this.pending.clear();
     this.permissions = [];
     this.toolTitles.clear();
@@ -509,6 +515,12 @@ export class OpencodeRunnerCore {
 
   private onPermissionRequest(rpcId: number | string, params: Record<string, unknown>): void {
     const request = parsePermissionRequest(rpcId, params);
+    if (this.phase !== "busy") {
+      // A request that lands after /abort (or outside a turn) belongs to work the operator already
+      // cancelled: it must never be approvable from the pane.
+      this.io.sendToChild(encodeAcpResult(rpcId, { outcome: { outcome: "cancelled" } }));
+      return;
+    }
     if (this.identity.posture === "full_bypass") {
       // Not expected (no ask rules are injected), but never leave opencode waiting.
       this.io.sendToChild(encodeAcpResult(rpcId, permissionOutcome(request, "allow")));

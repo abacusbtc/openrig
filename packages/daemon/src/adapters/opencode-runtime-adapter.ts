@@ -286,6 +286,9 @@ export class OpencodeRuntimeAdapter implements RuntimeAdapter {
     if (paneContent.includes("[opencode-runner] EXITED")) {
       return { ready: false, reason: "opencode-runner exited", code: "runner_exited" };
     }
+    // A runner that wrote a sidecar speaks for itself: not-yet-ready (booting, or restarting after a
+    // cancel) must not be overridden by an earlier READY line still in scrollback.
+    if (state) return { ready: false, reason: "opencode-runner has not reported ready yet", code: "awaiting_runtime" };
     if (paneContent.includes("[opencode-runner] READY")) {
       if (atShell) {
         return { ready: false, reason: "READY marker is stale scrollback; the pane is back at a shell", code: "runner_exited" };
