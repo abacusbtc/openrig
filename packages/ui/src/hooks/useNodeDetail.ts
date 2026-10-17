@@ -50,6 +50,8 @@ export interface NodeDetailData {
   } | null;
   latestError: string | null;
   model: string | null;
+  /** The model the seat is running, as its runtime reports it. */
+  effectiveModel?: string | null;
   agentRef: string | null;
   profile: string | null;
   resolvedSpecName: string | null;

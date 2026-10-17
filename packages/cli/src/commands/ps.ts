@@ -55,6 +55,8 @@ interface NodeEntry {
   nodeKind: "agent" | "infrastructure";
   runtime: string | null;
   model: string | null;
+  /** The model the seat is running, as its runtime reports it; absent from older daemons. */
+  effectiveModel?: string | null;
   sessionStatus: string | null;
   intentionallyStopped?: boolean;
   startupStatus: "pending" | "ready" | "attention_required" | "failed" | null;
@@ -204,6 +206,7 @@ const ALLOWED_NODE_FIELDS = new Set([
   "nodeKind",
   "runtime",
   "model",
+  "effectiveModel",
   "sessionStatus",
   "intentionallyStopped",
   "startupStatus",
@@ -623,12 +626,18 @@ function missingSessionGuidance(node: NodeEntry): string | null {
 // would reasonably conclude the seat HAS no model rather than that none was
 // declared. "not-declared" is the honest word for an absent declaration.
 //
-// SCOPE, stated because the column invites a wider reading: this is the
-// SPEC-DECLARED model (nodes.model), NOT the model the seat is running. The
-// running model has no producer today — it is the ACTIVITY-umbrella rider.
+// SCOPE, stated because the column invites a wider reading: formatDeclaredModel is the
+// SPEC-DECLARED model (nodes.model), NOT the model the seat is running. The running model
+// is `effectiveModel` (reported by the runtime); formatNodeModel prefers it and falls back
+// to the declaration, so the column shows what is actually answering whenever it is known.
 export function formatDeclaredModel(model: string | null | undefined): string {
   const m = (model ?? "").trim();
   return m.length > 0 ? m : "not-declared";
+}
+
+export function formatNodeModel(node: { model?: string | null; effectiveModel?: string | null }): string {
+  const effective = (node.effectiveModel ?? "").trim();
+  return effective.length > 0 ? effective : formatDeclaredModel(node.model);
 }
 
 export function compactNodeProjection(nodes: NodeEntry[]): Array<Record<string, unknown>> {
@@ -650,6 +659,7 @@ export function compactNodeProjection(nodes: NodeEntry[]): Array<Record<string, 
       // 15 claude-code seats — see formatDeclaredModel for the render rule.
       runtime: n.runtime ?? null,
       model: n.model ?? null,
+      effectiveModel: n.effectiveModel ?? null,
       // lifecycle + session/startup state.
       sessionStatus: n.sessionStatus,
       startupStatus: n.startupStatus,
@@ -1252,7 +1262,7 @@ async function handleNodes(
         member,
         n.canonicalSessionName ?? "—",
         n.runtime ?? "—",
-        formatDeclaredModel(n.model),
+        formatNodeModel(n),
         n.sessionStatus ?? "—",
         n.startupStatus ?? "—",
         n.oriented ?? "—",

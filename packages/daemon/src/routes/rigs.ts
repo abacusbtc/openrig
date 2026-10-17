@@ -399,6 +399,7 @@ rigsRoutes.get("/:id/graph", async (c) => {
     .all(rigId) as Array<{ id: string; rig_id: string; namespace: string; label: string; summary: string | null; continuity_policy_json: string | null; created_at: string }>;
   const overlay: InventoryOverlay[] = inventoryWithActivity.map((n) => ({
     logicalId: n.logicalId,
+    effectiveModel: n.effectiveModel ?? null,
     startupStatus: n.startupStatus,
     canonicalSessionName: n.canonicalSessionName,
     restoreOutcome: n.restoreOutcome,

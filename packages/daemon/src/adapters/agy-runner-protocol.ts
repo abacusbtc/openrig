@@ -44,6 +44,8 @@ export interface AgyRunnerState {
   launchId?: string;
   /** The agy conversation id: this runner's resume token. */
   conversationId?: string;
+  /** The model agy reports running (init event), else the model the seat requested; absent when agy chose its default. */
+  model?: string;
   /** True while a turn is in flight (turn sent, no `result` yet). */
   busy?: boolean;
   /** ISO time of the last completed turn. */

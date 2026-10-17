@@ -55,6 +55,8 @@ interface NodeInventoryRead {
   nodeKind: "agent" | "infrastructure";
   runtime: string | null;
   model?: string | null;
+  /** The model the seat is running, as its runtime reports it (older daemons omit it). */
+  effectiveModel?: string | null;
   lifecycleState: string;
   sessionStatus?: string | null;
   startupStatus?: string | null;
@@ -220,7 +222,7 @@ function toAgentRow(node: NodeInventoryRead): AgentRow {
     nodeId: node.nodeId,
     name: node.logicalId,
     runtime: node.runtime ?? "unknown",
-    model: node.model ?? null,
+    model: node.effectiveModel ?? node.model ?? null,
     spec: node.resolvedSpecName ?? "",
     profile: node.profile ?? null,
     specVersion: node.resolvedSpecVersion ?? null,

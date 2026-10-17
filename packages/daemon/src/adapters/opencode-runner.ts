@@ -201,6 +201,7 @@ type RpcKind = "initialize" | "newSession" | "resumeSession" | "setModel" | "pro
 export class OpencodeRunnerCore {
   phase: OpencodePhase = "starting";
   sessionId: string | undefined;
+  model: string | undefined;
   private ready = false;
   private everReady = false;
   private lineOpen = false;
@@ -378,6 +379,7 @@ export class OpencodeRunnerCore {
         const sid = str(result.sessionId);
         if (!isOpencodeSessionId(sid)) { this.fail(null, "opencode session/new carried no valid session id"); return; }
         this.sessionId = sid;
+        this.noteModel(result);
         this.afterSession();
         break;
       }
@@ -388,16 +390,32 @@ export class OpencodeRunnerCore {
           this.fail(null, `opencode resumed session ${echoed} but ${this.sessionId} was requested`);
           return;
         }
+        this.noteModel(result);
         this.afterSession();
         break;
       }
       case "setModel":
+        this.noteModel(result, this.identity.model);
         this.becomeReady();
         break;
       case "prompt":
         this.onPromptDone(str(result.stopReason) ?? "end_turn");
         break;
     }
+  }
+
+  /** Record the session's current model from an ACP `configOptions` list (the option with category "model"). */
+  private noteModel(result: Record<string, unknown>, fallback?: string): void {
+    const options = Array.isArray(result.configOptions) ? result.configOptions : [];
+    for (const option of options) {
+      if (typeof option !== "object" || option === null) continue;
+      const o = option as Record<string, unknown>;
+      if (o.category === "model" || o.id === "model") {
+        const current = str(o.currentValue);
+        if (current) { this.model = current; return; }
+      }
+    }
+    if (fallback) this.model = fallback;
   }
 
   private afterSession(): void {
@@ -578,6 +596,7 @@ export class OpencodeRunnerCore {
       ready: false,
       launchId: this.identity.launchId,
       sessionId: this.sessionId,
+      model: this.model,
       busy: false,
       lastTurnAt: this.lastTurnAt,
       updatedAt: this.io.now(),
@@ -624,6 +643,7 @@ export class OpencodeRunnerCore {
       ready: this.ready,
       launchId: this.identity.launchId,
       sessionId: this.sessionId,
+      model: this.model,
       lastTurnAt: this.lastTurnAt,
       updatedAt: this.io.now(),
       ...patch,

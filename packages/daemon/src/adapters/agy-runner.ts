@@ -159,6 +159,8 @@ export interface AgyRunnerIdentity {
   generation?: string;
   launchId: string;
   posture: AgyPosture;
+  /** The model requested at launch, reported when agy's init event does not name one. */
+  model?: string;
 }
 
 export const AGY_MAX_QUEUED_TURNS = 100;
@@ -170,6 +172,7 @@ export const AGY_INTERRUPT_KILL_MS = 10_000;
 export class AgyRunnerCore {
   phase: AgyPhase = "starting";
   conversationId: string | undefined;
+  model: string | undefined;
   private ready = false;
   private everReady = false;
   private lineOpen = false;
@@ -308,6 +311,8 @@ export class AgyRunnerCore {
       return;
     }
     this.conversationId = id;
+    const init = event.init;
+    this.model = (typeof init === "object" && init !== null ? str((init as Record<string, unknown>).model) : undefined) ?? this.identity.model;
     this.ready = true;
     this.phase = "idle";
     this.writeSidecar({ busy: false });
@@ -403,6 +408,7 @@ export class AgyRunnerCore {
       ready: false,
       launchId: this.identity.launchId,
       conversationId: this.conversationId,
+      model: this.model,
       busy: false,
       lastTurnAt: this.lastTurnAt,
       updatedAt: this.io.now(),
@@ -451,6 +457,7 @@ export class AgyRunnerCore {
       ready: this.ready,
       launchId: this.identity.launchId,
       conversationId: this.conversationId,
+      model: this.model,
       lastTurnAt: this.lastTurnAt,
       updatedAt: this.io.now(),
       ...patch,
@@ -623,6 +630,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     generation: process.env.OPENRIG_OCCUPANT_GENERATION,
     launchId: args.launchId,
     posture: args.posture,
+    model: args.model,
   }, args.conversationId, Date.now());
 
   createRunnerInput(process.stdin as NodeJS.ReadStream, process.stdout as NodeJS.WriteStream, (block) => core.onPaneInput(block));

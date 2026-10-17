@@ -113,6 +113,31 @@ describe("permission requests", () => {
 });
 
 describe("OpencodeRunnerCore handshake", () => {
+  const modelOptions = (current: string) => [{ id: "model", category: "model", type: "select", currentValue: current, options: [] }];
+  it("records the session's current model from configOptions", () => {
+    const h = harness();
+    h.core.start();
+    h.line({ id: h.lastRequest("initialize").id, result: { protocolVersion: 1 } });
+    h.line({ id: h.lastRequest("session/new").id, result: { sessionId: SID, configOptions: modelOptions("opencode/big-pickle") } });
+    expect(h.lastSidecar().model).toBe("opencode/big-pickle");
+  });
+  it("prefers the model reported after set_config_option, and falls back to the requested one", () => {
+    const reported = harness({ model: "opencode/glm-5.3-flash-free" });
+    reported.core.start();
+    reported.line({ id: reported.lastRequest("initialize").id, result: { protocolVersion: 1 } });
+    reported.line({ id: reported.lastRequest("session/new").id, result: { sessionId: SID, configOptions: modelOptions("opencode/big-pickle") } });
+    reported.line({ id: reported.lastRequest("session/set_config_option").id, result: { configOptions: modelOptions("opencode/glm-5.3-flash-free") } });
+    expect(reported.lastSidecar().model).toBe("opencode/glm-5.3-flash-free");
+
+    const fallback = harness({ model: "opencode/glm-5.3-flash-free" });
+    fallback.handshake();
+    expect(fallback.lastSidecar().model).toBe("opencode/glm-5.3-flash-free");
+  });
+  it("leaves the model unset when the session reports none and none was requested", () => {
+    const h = harness();
+    h.handshake();
+    expect(h.lastSidecar().model).toBeUndefined();
+  });
   it("initializes, opens a new session and becomes ready", () => {
     const h = harness();
     h.core.start();

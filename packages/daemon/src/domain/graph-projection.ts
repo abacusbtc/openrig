@@ -76,6 +76,8 @@ const VERTICAL_SPACING = 200;
 
 export interface InventoryOverlay {
   logicalId: string;
+  /** The model the seat is running, as its runtime reports it; preferred over the declared model in graph node data. */
+  effectiveModel?: string | null;
   startupStatus: "pending" | "ready" | "attention_required" | "failed" | null;
   canonicalSessionName: string | null;
   restoreOutcome: string;
@@ -149,7 +151,7 @@ export function projectRigToGraph(input: RigGraphInput, inventoryOverlay?: Inven
         rigId: node.rigId,
         role: node.role,
         runtime: node.runtime,
-        model: node.model,
+        model: overlayMap.get(node.logicalId)?.effectiveModel ?? node.model,
         effort: node.effort ?? null,
         status: latestSession ? latestSession.status : null,
         binding: node.binding,
