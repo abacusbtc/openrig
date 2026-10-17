@@ -68,7 +68,11 @@ function oneLine(text: string, max = 100): string {
 }
 
 /** Map one ACP `session/update` payload. `toolTitles` remembers each tool call's title across updates. */
-export function mapOpencodeUpdate(update: Record<string, unknown>, toolTitles: Map<string, string>): OpencodeMapped {
+export function mapOpencodeUpdate(
+  update: Record<string, unknown>,
+  toolTitles: Map<string, string>,
+  toolKinds: Map<string, string> = new Map(),
+): OpencodeMapped {
   switch (update.sessionUpdate) {
     case "agent_message_chunk": {
       const content = (update.content ?? {}) as Record<string, unknown>;
@@ -88,7 +92,8 @@ export function mapOpencodeUpdate(update: Record<string, unknown>, toolTitles: M
       const status = str(update.status);
       const title = str(update.title) ?? (id ? toolTitles.get(id) : undefined) ?? "tool";
       if (id) toolTitles.set(id, title);
-      const kind = str(update.kind) ?? "tool";
+      const kind = str(update.kind) ?? (id ? toolKinds.get(id) : undefined) ?? "tool";
+      if (id && str(update.kind)) toolKinds.set(id, str(update.kind)!);
       if (status === "in_progress") {
         return {
           mirrorLines: [`  ⚙ ${kind} ${oneLine(title)} …`],
@@ -97,11 +102,11 @@ export function mapOpencodeUpdate(update: Record<string, unknown>, toolTitles: M
         };
       }
       if (status === "completed") {
-        if (id) toolTitles.delete(id);
+        if (id) { toolTitles.delete(id); toolKinds.delete(id); }
         return { mirrorLines: [`  ⚙ ${kind} done`], closesLine: true };
       }
       if (status === "failed") {
-        if (id) toolTitles.delete(id);
+        if (id) { toolTitles.delete(id); toolKinds.delete(id); }
         return { mirrorLines: [`  ⚙ ${kind} FAILED`], closesLine: true };
       }
       return { mirrorLines: [] };
@@ -204,6 +209,7 @@ export class OpencodeRunnerCore {
   private nextRpcId = 1;
   private pending = new Map<number, RpcKind>();
   private toolTitles = new Map<string, string>();
+  private toolKinds = new Map<string, string>();
   private permissions: Array<{ request: OpencodePermissionRequest; askedAtMs: number }> = [];
   private startedAtMs: number;
   private clockMs: number;
@@ -432,7 +438,7 @@ export class OpencodeRunnerCore {
 
   private onNotification(method: string, params: Record<string, unknown>): void {
     if (method !== "session/update") return;
-    const mapped = mapOpencodeUpdate((params.update ?? {}) as Record<string, unknown>, this.toolTitles);
+    const mapped = mapOpencodeUpdate((params.update ?? {}) as Record<string, unknown>, this.toolTitles, this.toolKinds);
     if (mapped.closesLine) this.closeLine();
     for (const line of mapped.mirrorLines) {
       this.closeLine();
@@ -476,6 +482,7 @@ export class OpencodeRunnerCore {
     this.lastTurnAt = this.io.now();
     this.phase = "idle";
     this.toolTitles.clear();
+    this.toolKinds.clear();
     this.writeSidecar({ busy: false, lastTurnAt: this.lastTurnAt });
     this.io.postActivity(this.activityPayload("Stop", subtype));
     this.dispatchNext();
@@ -504,6 +511,7 @@ export class OpencodeRunnerCore {
     this.pending.clear();
     this.permissions = [];
     this.toolTitles.clear();
+    this.toolKinds.clear();
     this.phase = "starting";
     this.startedAtMs = this.clockMs;
     this.writeSidecar({ busy: false, awaitingPermission: false });

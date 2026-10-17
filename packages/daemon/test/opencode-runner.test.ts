@@ -76,6 +76,12 @@ describe("mapOpencodeUpdate", () => {
     expect(running.activity).toEqual({ hookEvent: "PreToolUse", subtype: "execute" });
     expect(running.closesLine).toBe(true);
   });
+  it("remembers a call's kind for a completion update that omits it", () => {
+    const t = titles();
+    const k = new Map<string, string>();
+    mapOpencodeUpdate({ sessionUpdate: "tool_call_update", toolCallId: "w", status: "in_progress", kind: "edit", title: "write" }, t, k);
+    expect(mapOpencodeUpdate({ sessionUpdate: "tool_call_update", toolCallId: "w", status: "completed" }, t, k).mirrorLines).toEqual(["  ⚙ edit done"]);
+  });
   it("marks tool completion and failure and forgets the call", () => {
     const t = titles();
     t.set("a", "ls");
