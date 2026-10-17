@@ -167,6 +167,23 @@ describe("RigSpecPreflight", () => {
     expect(result.errors.some((e) => e.includes("agy"))).toBe(true);
   });
 
+  it("probes opencode independently for an opencode-only legacy rig", async () => {
+    const exec = vi.fn<ExecFn>().mockResolvedValue("");
+    const pf = createPreflight({ exec });
+    const result = await pf.check(validSpec({ nodes: [{ id: "worker", runtime: "opencode", cwd: "/" }] }));
+    expect(result.ready).toBe(true);
+    expect(exec).toHaveBeenCalledWith("opencode --version");
+    expect(exec).not.toHaveBeenCalledWith("pi --version");
+    expect(exec).not.toHaveBeenCalledWith("agy --version");
+  });
+
+  it("an opencode rig fails preflight with an install hint when opencode is not available", async () => {
+    const exec = vi.fn<ExecFn>().mockRejectedValue(new Error("not found"));
+    const result = await createPreflight({ exec }).check(validSpec({ nodes: [{ id: "worker", runtime: "opencode", cwd: "/" }] }));
+    expect(result.ready).toBe(false);
+    expect(result.errors.some((e) => e.includes("opencode"))).toBe(true);
+  });
+
   it("runtime not available -> error", async () => {
     const exec = vi.fn<ExecFn>().mockRejectedValue(new Error("not found"));
     const pf = createPreflight({ exec });

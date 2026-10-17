@@ -131,6 +131,13 @@ export class RuntimeVerifier {
     return result;
   }
 
+  /** opencode is an independent executable; seats talk to it over `opencode acp`. */
+  async verifyOpencode(): Promise<RuntimeVerification> {
+    const result = await this.verifyVersionOrHelp("opencode", "opencode");
+    this.persist(result);
+    return result;
+  }
+
   /** agy (Antigravity CLI) is an independent executable. */
   async verifyAgy(): Promise<RuntimeVerification> {
     const result = await this.verifyVersionOrHelp("agy", "agy");
@@ -140,7 +147,7 @@ export class RuntimeVerifier {
 
   /**
    * Verify multiple runtimes. Returns results in input order.
-   * @param runtimes - canonical runtime names: 'tmux', 'cmux', 'claude-code', 'codex', 'pi', 'omp', 'agy'
+   * @param runtimes - canonical runtime names: 'tmux', 'cmux', 'claude-code', 'codex', 'pi', 'omp', 'agy', 'opencode'
    */
   async verifyAll(runtimes: string[]): Promise<RuntimeVerification[]> {
     const results: RuntimeVerification[] = [];
@@ -153,6 +160,7 @@ export class RuntimeVerifier {
         case "pi": results.push(await this.verifyPi()); break;
         case "omp": results.push(await this.verifyOmp()); break;
         case "agy": results.push(await this.verifyAgy()); break;
+        case "opencode": results.push(await this.verifyOpencode()); break;
         default: {
           const v = this.buildVerification(runtime, "not_found", null, null, `unknown runtime: ${runtime}`);
           this.persist(v);
