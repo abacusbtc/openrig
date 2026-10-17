@@ -2108,7 +2108,7 @@ export class PodRigInstantiator {
       // the same source startNode binds for the write). An adapter that writes skills
       // outside the project tree (OMP's seat agent dir) names its own skill target.
       resolveTargetPath: (category, effectiveId, cwd, sourcePath) =>
-        input.member.runtime === "codex" && category === "skill"
+        (input.member.runtime === "codex" || input.member.runtime === "agy") && category === "skill"
           ? nodePath.join(cwd, ".agents", "skills", effectiveId, "SKILL.md")
           : category === "skill" && adapter.skillTargetPath
             ? adapter.skillTargetPath(launchResult.binding.tmuxSession, effectiveId)
@@ -2130,7 +2130,7 @@ export class PodRigInstantiator {
 
     // Codex project() writes plan entries before startup-file delivery. Protect
     // edited skills there too; filtering only startup files is insufficient.
-    if (input.member.runtime === "codex" && !input.force) {
+    if ((input.member.runtime === "codex" || input.member.runtime === "agy") && !input.force) {
       planResult.plan.entries = planResult.plan.entries.filter(
         entry => entry.category !== "skill" || entry.classification !== "operator_conflict",
       );

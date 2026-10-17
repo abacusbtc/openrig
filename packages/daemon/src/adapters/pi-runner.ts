@@ -886,7 +886,7 @@ export function parseRunnerArgs(argv: string[]): RunnerArgs {
   return args as RunnerArgs;
 }
 
-function resolveActivityEndpoint(env: NodeJS.ProcessEnv): { baseUrl: string; token: string } | null {
+export function resolveActivityEndpoint(env: NodeJS.ProcessEnv): { baseUrl: string; token: string } | null {
   let baseUrl = env.OPENRIG_URL?.trim() || null;
   let token = env.OPENRIG_ACTIVITY_HOOK_TOKEN?.trim() || null;
   if (!baseUrl && env.OPENRIG_PORT) {

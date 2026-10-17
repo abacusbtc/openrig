@@ -288,6 +288,53 @@ activityRoutes.post("/hooks", async (c) => {
       return c.json({ ok: true, sessionId, provenance: "rpc", tokenPersisted: validation.ok });
     }
 
+    // agy session identity arrives from the agy-runner's `init` event (provenance "rpc", never
+    // scrape). The resume TOKEN is the agy conversation id (body.sessionId), format-validated as a
+    // UUID before the persist and never echoed on failure. Like Pi/OMP it is gated on the current
+    // occupant generation, so a delayed post from a retired runner cannot replace the successor's token.
+    if (runtime === "agy") {
+      if (sessionName !== resolved.sessionName) {
+        return c.json({ ok: false, code: "session_not_found", tokenPersisted: false, error: "Session identity does not match the managed seat." }, 404);
+      }
+      if (resolved.runtime !== "agy") {
+        return c.json({ ok: false, code: "runtime_mismatch", tokenPersisted: false, error: "Session identity runtime does not match the managed seat." }, 409);
+      }
+      const generation = stringOrNull(body.generation);
+      let reason: string | null = null;
+      try {
+        const current = sessionRegistry.currentOccupantTenure(resolved.nodeId);
+        if (!generation) reason = "generation_unverifiable";
+        else if (!current || !sessionRegistry.isOccupantGenerationRegistered(resolved.nodeId, generation)) {
+          reason = "generation_unresolvable";
+        } else if (current.generationUuid !== generation) reason = "generation_mismatch";
+      } catch {
+        return c.json({
+          ok: false, code: "generation_resolver_error", tokenPersisted: false,
+          error: "agy session identity ignored: occupant generation is unavailable.",
+        }, 503);
+      }
+      if (reason) {
+        return c.json({
+          ok: false, code: reason, tokenPersisted: false,
+          error: "agy session identity ignored: emitter is not the registered current occupant.",
+        }, 409);
+      }
+      const validation = validateResumeToken("agy", sessionId);
+      const tokenPersisted = validation.ok
+        && (sessionRegistry.updateResumeToken(resolved.sessionId, validation.resumeType, validation.token, "hook")
+          || sessionRegistry.resumeTokenMatches(resolved.sessionId, validation.resumeType, validation.token));
+      eventBus.emit({
+        type: "agent.session_identity",
+        rigId: resolved.rigId,
+        nodeId: resolved.nodeId,
+        sessionName: resolved.sessionName,
+        runtime: "agy",
+        sessionId,
+        provenance: "rpc",
+      });
+      return c.json({ ok: true, sessionId, provenance: "rpc", tokenPersisted });
+    }
+
     // The resume-type label derives from the RUNTIME, never a fixed default: this line used to stamp
     // "codex_id" for every non-pi runtime, so claude-code seats carried a codex-typed label over a
     // correct token value — and a restore path selecting its resume MECHANISM by label would pick the

@@ -31,6 +31,7 @@ function processNameIs(command: string, name: string): boolean {
 // state; a bare `omp` executable could use the default, unisolated user home.
 // No Layer-1 OMP signal: tmux reports the runner as `node`, never its argv.
 const OMP_READY_PATTERN = /^\s*\[omp-runner\] READY(?:\s|$)/;
+const AGY_READY_PATTERN = /^\s*\[agy-runner\] READY(?:\s|$)/;
 
 const CLAUDE_PANE_PATTERNS = [
   { label: "Claude Code", test: (line: string) => /^\s*Claude Code\b/i.test(line) },
@@ -86,6 +87,7 @@ export class SessionFingerprinter {
         const hint = cmuxMatch.runtime.includes("claude") ? "claude-code" as RuntimeHint
           : cmuxMatch.runtime.includes("codex") ? "codex" as RuntimeHint
           : cmuxMatch.runtime.toLowerCase() === "omp" || cmuxMatch.runtime.toLowerCase() === "oh-my-pi" ? "omp" as RuntimeHint
+          : cmuxMatch.runtime.toLowerCase() === "agy" ? "agy" as RuntimeHint
           : "unknown" as RuntimeHint;
         return { runtimeHint: hint, confidence: "highest", evidence };
       }
@@ -148,6 +150,15 @@ export class SessionFingerprinter {
           evidence.layerUsed = 2;
           evidence.paneContentSignal = { pattern: "[omp-runner] READY", matchedLine: line.trim() };
           return { runtimeHint: "omp", confidence: "medium", evidence };
+        }
+      }
+
+      // The agy-runner likewise prints no Claude/Codex banner; same ordering rule as OMP's marker.
+      for (const line of lines) {
+        if (AGY_READY_PATTERN.test(line)) {
+          evidence.layerUsed = 2;
+          evidence.paneContentSignal = { pattern: "[agy-runner] READY", matchedLine: line.trim() };
+          return { runtimeHint: "agy", confidence: "medium", evidence };
         }
       }
     }
