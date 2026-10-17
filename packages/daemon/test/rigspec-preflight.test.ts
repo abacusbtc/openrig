@@ -150,6 +150,23 @@ describe("RigSpecPreflight", () => {
     expect(exec).not.toHaveBeenCalledWith("pi --version");
   });
 
+  it("probes agy independently for an agy-only legacy rig", async () => {
+    const exec = vi.fn<ExecFn>().mockResolvedValue("");
+    const pf = createPreflight({ exec });
+    const result = await pf.check(validSpec({ nodes: [{ id: "worker", runtime: "agy", cwd: "/" }] }));
+    expect(result.ready).toBe(true);
+    expect(exec).toHaveBeenCalledWith("agy --version");
+    expect(exec).not.toHaveBeenCalledWith("pi --version");
+    expect(exec).not.toHaveBeenCalledWith("omp --version");
+  });
+
+  it("an agy rig fails preflight with an install hint when agy is not available", async () => {
+    const exec = vi.fn<ExecFn>().mockRejectedValue(new Error("not found"));
+    const result = await createPreflight({ exec }).check(validSpec({ nodes: [{ id: "worker", runtime: "agy", cwd: "/" }] }));
+    expect(result.ready).toBe(false);
+    expect(result.errors.some((e) => e.includes("agy"))).toBe(true);
+  });
+
   it("runtime not available -> error", async () => {
     const exec = vi.fn<ExecFn>().mockRejectedValue(new Error("not found"));
     const pf = createPreflight({ exec });
