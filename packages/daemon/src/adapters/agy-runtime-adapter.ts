@@ -281,6 +281,9 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
     if (paneContent.includes("[agy-runner] EXITED")) {
       return { ready: false, reason: "agy-runner exited", code: "runner_exited" };
     }
+    // A runner that wrote a sidecar speaks for itself: not-yet-ready (booting, or restarting after an
+    // interrupt) must not be overridden by an earlier READY line still in scrollback.
+    if (state) return { ready: false, reason: "agy-runner has not reported ready yet", code: "awaiting_runtime" };
     if (paneContent.includes("[agy-runner] READY")) {
       if (atShell) {
         return { ready: false, reason: "READY marker is stale scrollback; the pane is back at a shell", code: "runner_exited" };
