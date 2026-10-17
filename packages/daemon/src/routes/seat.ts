@@ -172,6 +172,13 @@ seatRoutes.post("/handover/:seatRef", async (c) => {
         ? { readSessionFile: omp.readSessionFile.bind(omp) }
         : undefined;
     })(),
+    agyRunnerStateStore: (() => {
+      const adapters = c.get("runtimeAdapters" as never) as Record<string, unknown> | undefined;
+      const agy = adapters?.["agy"] as { readSessionFile?: (sessionName: string) => { ok: true; sessionFile: string } | { ok: false; reason: string } } | undefined;
+      return typeof agy?.readSessionFile === "function"
+        ? { readSessionFile: agy.readSessionFile.bind(agy) }
+        : undefined;
+    })(),
     // GHOST-STAGE (e/Class-B) — the canonical OccupantInvalidator so commit()'s re-key call fires
     // (invalidate the retiring occupant's seat-name-keyed stores before the successor accumulates any).
     occupantInvalidator: (c.get("occupantInvalidator" as never) as import("../domain/occupant-invalidator.js").OccupantInvalidator | undefined) ?? undefined,

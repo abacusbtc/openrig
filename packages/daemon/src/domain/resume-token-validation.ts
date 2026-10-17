@@ -9,7 +9,7 @@
 // actually resume" probe is intentionally out of scope (heavy + must not
 // mutate live state); format validation is the safe, side-effect-free floor.
 
-export type ResumeType = "claude_id" | "codex_id" | "pi_session_file" | "omp_session_file";
+export type ResumeType = "claude_id" | "codex_id" | "pi_session_file" | "omp_session_file" | "agy_conversation_id";
 
 export interface ResumeTokenValidationOk {
   ok: true;
@@ -48,6 +48,7 @@ export function resumeTypeForRuntime(runtime: string | null): ResumeType | null 
   if (runtime === "codex") return "codex_id";
   if (runtime === "pi") return "pi_session_file";
   if (runtime === "omp") return "omp_session_file";
+  if (runtime === "agy") return "agy_conversation_id";
   return null;
 }
 
@@ -62,6 +63,17 @@ function validateIdShapedToken(resumeType: ResumeType, token: string): ResumeTok
     };
   }
   return { ok: true, resumeType, token };
+}
+
+// agy conversation ids are UUIDs. The token reaches `agy --conversation <id>`, so only
+// the exact UUID shape is accepted; anything else is a format error, never passed through.
+const AGY_CONVERSATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function validateAgyConversationToken(token: string): ResumeTokenValidationOk | ResumeTokenValidationErr {
+  if (!AGY_CONVERSATION_ID_RE.test(token)) {
+    return { ok: false, error: "agy conversation token must be a conversation id (a UUID such as 01234567-89ab-4def-8123-456789abcdef)." };
+  }
+  return { ok: true, resumeType: "agy_conversation_id", token };
 }
 
 function validateSessionFileToken(resumeType: "pi_session_file" | "omp_session_file", token: string): ResumeTokenValidationOk | ResumeTokenValidationErr {
@@ -95,7 +107,7 @@ export function validateResumeToken(
   if (!resumeType) {
     return {
       ok: false,
-      error: `set-resume-token is not supported for runtime "${runtime ?? "unknown"}" (only claude-code, codex, pi, and omp have resume tokens).`,
+      error: `set-resume-token is not supported for runtime "${runtime ?? "unknown"}" (only claude-code, codex, pi, omp, and agy have resume tokens).`,
     };
   }
   if (typeof rawToken !== "string") {
@@ -108,5 +120,6 @@ export function validateResumeToken(
   if (resumeType === "pi_session_file" || resumeType === "omp_session_file") {
     return validateSessionFileToken(resumeType, token);
   }
+  if (resumeType === "agy_conversation_id") return validateAgyConversationToken(token);
   return validateIdShapedToken(resumeType, token);
 }
