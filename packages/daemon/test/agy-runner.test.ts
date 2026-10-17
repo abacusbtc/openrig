@@ -8,7 +8,7 @@ import type { AgyRunnerState } from "../src/adapters/agy-runner-protocol.js";
 const CONV = "c001e46a-af55-421e-82c0-def97b816b6b";
 const OTHER = "11111111-2222-4333-8444-555555555555";
 
-function harness(opts: { resume?: string; posture?: "floor" | "auto" | "full_bypass" } = {}) {
+function harness(opts: { resume?: string; posture?: "floor" | "auto" | "full_bypass"; model?: string } = {}) {
   const sent: string[] = [];
   const mirror: string[] = [];
   const activity: Array<Record<string, unknown>> = [];
@@ -29,9 +29,9 @@ function harness(opts: { resume?: string; posture?: "floor" | "auto" | "full_byp
     now: () => `2026-10-17T00:00:${String(tick++).padStart(2, "0")}Z`,
   };
   const core = new AgyRunnerCore(io, {
-    sessionName: "dev-qa@dev-team", nodeId: "node-1", generation: "3", launchId: "L1", posture: opts.posture ?? "floor",
+    sessionName: "dev-qa@dev-team", nodeId: "node-1", generation: "3", launchId: "L1", posture: opts.posture ?? "floor", model: opts.model,
   }, opts.resume, 1000);
-  const init = (id = CONV) => core.onChildLine(JSON.stringify({ event: "init", conversation_id: id, init: { tools: [] } }));
+  const init = (id = CONV, initPayload: Record<string, unknown> = { tools: [] }) => core.onChildLine(JSON.stringify({ event: "init", conversation_id: id, init: initPayload }));
   const step = (s: Record<string, unknown>) => core.onChildLine(JSON.stringify({ event: "step_update", step_update: { conversation_id: CONV, ...s } }));
   const result = (r: Record<string, unknown>) => core.onChildLine(JSON.stringify({ event: "result", result: { conversation_id: CONV, status: "SUCCESS", response: "", ...r } }));
   const text = () => mirror.join("");
@@ -90,6 +90,23 @@ describe("AgyRunnerCore lifecycle", () => {
     expect(h.activity).toContainEqual(expect.objectContaining({
       eventFamily: "session_identity", runtime: "agy", sessionName: "dev-qa@dev-team", sessionId: CONV, hookEvent: "SessionStart", generation: "3", nodeId: "node-1",
     }));
+  });
+
+  it("records the model agy reports in its init event, falling back to the requested model", () => {
+    const reported = harness({ model: "gemini-3.8-flash-high" });
+    reported.core.start();
+    reported.init(CONV, { model: "gemini-3.8-flash-medium", tools: [] });
+    expect(reported.lastSidecar().model).toBe("gemini-3.8-flash-medium");
+
+    const requested = harness({ model: "gemini-3.8-flash-high" });
+    requested.core.start();
+    requested.init();
+    expect(requested.lastSidecar().model).toBe("gemini-3.8-flash-high");
+
+    const defaulted = harness();
+    defaulted.core.start();
+    defaulted.init();
+    expect(defaulted.lastSidecar().model).toBeUndefined();
   });
 
   it("rejects an init without a valid conversation id", () => {

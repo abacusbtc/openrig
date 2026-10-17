@@ -686,6 +686,8 @@ export interface NodeInventoryEntry {
   latestError: string | null;
   // Extended fields
   model: string | null;
+  /** The model the seat is actually running, as its runtime reports it; null when not observable. */
+  effectiveModel?: string | null;
   agentRef: string | null;
   profile: string | null;
   codexConfigProfile?: string | null;

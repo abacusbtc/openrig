@@ -55,6 +55,8 @@ export interface OpencodeRunnerState {
   launchId?: string;
   /** The ACP session id: this runner's resume token. */
   sessionId?: string;
+  /** The model opencode reports as the session's current model (configOptions), else the requested one. */
+  model?: string;
   /** True while a prompt is in flight. */
   busy?: boolean;
   /** True while a permission request waits on the pane. */

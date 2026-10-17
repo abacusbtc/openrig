@@ -21,6 +21,7 @@ import { deriveCanonicalSessionName } from "./session-name.js";
 import { buildNativeResumeCommand, buildCodexResumeCore } from "./native-resume-probe.js";
 import { AppliedLaunchObservationStore } from "./applied-launch-observation-store.js";
 import { tmuxAttachCommand } from "../adapters/tmux-server.js";
+import { resolveEffectiveModel } from "./effective-model.js";
 
 // -- Row types for SQL results --
 
@@ -1049,6 +1050,7 @@ export function getNodeInventoryWithContext(
       : undefined;
     return {
       ...e,
+      effectiveModel: resolveEffectiveModel({ runtime: e.runtime, sessionName: e.canonicalSessionName, transcriptPath: usage.transcriptPath }),
       contextUsage: { ...usage, currentUsage: null },
       ...(transcriptIngest ? { transcriptIngest } : {}),
     };
@@ -1074,6 +1076,7 @@ export function getNodeDetailWithContext(
 
   if (nodeRow) {
     detail.contextUsage = contextUsageStore.getForNode(nodeRow.id, detail.canonicalSessionName);
+    detail.effectiveModel = resolveEffectiveModel({ runtime: detail.runtime, sessionName: detail.canonicalSessionName, transcriptPath: detail.contextUsage.transcriptPath });
   } else {
     detail.contextUsage = contextUsageStore.unknownUsage("no_data");
   }

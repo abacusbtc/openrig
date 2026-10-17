@@ -710,7 +710,7 @@ export function LiveNodeDetails({ rigId, logicalId }: LiveNodeDetailsProps) {
           actions={data ? (
             <RuntimeBadge
               runtime={data.runtime}
-              model={data.model}
+              model={data.effectiveModel ?? data.model}
               size="sm"
               compact
               className="bg-surface-lowest/40 backdrop-blur-sm"

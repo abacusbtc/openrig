@@ -128,7 +128,7 @@ export function SeatOverviewTable({ data, activityVisual: recentVisual }: SeatOv
       value: data.runtime ? (
         <RuntimeBadge
           runtime={data.runtime}
-          model={data.model}
+          model={data.effectiveModel ?? data.model}
           size="xs"
           compact
           variant="inline"
@@ -136,7 +136,7 @@ export function SeatOverviewTable({ data, activityVisual: recentVisual }: SeatOv
         />
       ) : null,
     },
-    { key: "model", label: "model", value: data.model, mono: true },
+    { key: "model", label: "model", value: data.effectiveModel ?? data.model, mono: true },
     { key: "profile", label: "profile", value: data.profile, mono: true },
     { key: "spec", label: "spec", value: specCell, mono: true },
     { key: "activity", label: "activity", value: activityValue },
