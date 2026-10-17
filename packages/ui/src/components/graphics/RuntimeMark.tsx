@@ -40,6 +40,8 @@ const toneClass: Record<RuntimeBrandId, string> = {
   codex: "border-outline/50 bg-surface-lowest/75 text-on-surface",
   pi: "border-[#4c5b9e]/45 bg-[#5b6bb5]/[0.10] text-[#33406e]",
   omp: "border-[#773c99]/45 bg-[#8648ad]/[0.12] text-[#572875]",
+  agy: "border-[#2b6cb0]/45 bg-[#3b82c4]/[0.12] text-[#1e4e80]",
+  opencode: "border-[#0f766e]/45 bg-[#14b8a6]/[0.10] text-[#0b4f4a]",
   terminal: "border-outline/45 bg-inverse-surface/[0.08] text-on-surface",
   unknown: "border-outline-variant bg-surface-lowest/55 text-on-surface-variant",
 };
@@ -49,6 +51,8 @@ const inlineToneClass: Record<RuntimeBrandId, string> = {
   codex: "text-on-surface",
   pi: "text-[#33406e]",
   omp: "text-[#572875]",
+  agy: "text-[#1e4e80]",
+  opencode: "text-[#0b4f4a]",
   terminal: "text-on-surface",
   unknown: "text-on-surface-variant",
 };
@@ -122,6 +126,24 @@ function OmpGlyph({ className, title, decorative }: { className?: string; title:
       <rect x="1" y="1" width="14" height="14" rx="3" fill="#8648ad" />
       <path d="M3.5 5.2h9M5.6 5.2v5.5M9 5.2v5.5" fill="none" stroke="#faf4ff" strokeWidth="1.2" strokeLinecap="round" />
       <path d="m10.7 10.5.8.8 1.6-2" fill="none" stroke="#faf4ff" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function AgyGlyph({ className, title, decorative }: { className?: string; title: string; decorative?: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" {...glyphA11y(title, decorative)} className={className}>
+      <rect x="1" y="1" width="14" height="14" rx="3" fill="#3b82c4" />
+      <path d="M8 3.2 12.2 12.4M8 3.2 3.8 12.4M5.4 9.4h5.2" fill="none" stroke="#f0f7ff" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function OpencodeGlyph({ className, title, decorative }: { className?: string; title: string; decorative?: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" {...glyphA11y(title, decorative)} className={className}>
+      <rect x="1" y="1" width="14" height="14" rx="3" fill="#0f766e" />
+      <path d="m6.2 5.4-2.6 2.6 2.6 2.6M9.8 5.4l2.6 2.6-2.6 2.6" fill="none" stroke="#effdfa" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -364,6 +386,8 @@ export function RuntimeMark({ runtime, size = "sm", className, title, decorative
   if (id === "codex") return <CodexGlyph className={cls} title={label} decorative={decorative} />;
   if (id === "pi") return <PiGlyph className={cls} title={label} decorative={decorative} />;
   if (id === "omp") return <OmpGlyph className={cls} title={label} decorative={decorative} />;
+  if (id === "agy") return <AgyGlyph className={cls} title={label} decorative={decorative} />;
+  if (id === "opencode") return <OpencodeGlyph className={cls} title={label} decorative={decorative} />;
   if (id === "terminal") return <TerminalGlyph className={cls} title={label} decorative={decorative} />;
   return <UnknownGlyph className={cls} title={label} decorative={decorative} />;
 }

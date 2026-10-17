@@ -37,6 +37,16 @@ describe("graphics runtime package", () => {
     expect(screen.getByRole("img", { name: "Claude" })).toBeTruthy();
   });
 
+  it("identifies agy and opencode seats instead of showing Unknown", () => {
+    expect(normalizeRuntimeBrandId("agy")).toBe("agy");
+    expect(normalizeRuntimeBrandId("opencode")).toBe("opencode");
+    expect(runtimeBrand("agy").label).toBe("Antigravity");
+    render(<RuntimeBadge runtime="opencode" model="opencode/glm-5.3-flash-free" />);
+    expect(screen.getByRole("img", { name: "opencode" })).toBeTruthy();
+    expect(screen.getByText("opencode/glm-5.3-flash-free")).toBeTruthy();
+    expect(screen.queryByText("Unknown")).toBeNull();
+  });
+
   it("keeps standalone runtime marks named for icon-only use", () => {
     render(<RuntimeMark runtime="claude-code" />);
     expect(screen.getByRole("img", { name: "Claude" })).toBeTruthy();
