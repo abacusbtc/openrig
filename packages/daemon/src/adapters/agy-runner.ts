@@ -117,7 +117,7 @@ export function deniedActionsNotice(denied: AgyDeniedAction[], posture: AgyPostu
     return lines;
   }
   // Name the rule that would allow the first denial. A command rule names the binary only.
-  const first = denied[0];
+  const first = denied[0]!;
   const target = first.display_name ? (first.action === "command" ? first.display_name.trim().split(/\s+/)[0] : first.display_name) : undefined;
   const rule = target ? `${first.action}(${target})` : `${first.action}(<target>)`;
   lines.push(`${AGY_RUNNER_ERROR_MARKER} headless agy cannot ask. To allow the first of these, add "${rule}" to permissions.allow in ~/.gemini/antigravity-cli/settings.json (the file is shared by every agy seat, so keep rules narrow); or launch this seat with a wider permission posture`);
