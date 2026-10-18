@@ -66,7 +66,7 @@ describe("opencode-runner process", () => {
   it("injects the posture as inline opencode config", async () => {
     startRunner([], "L1", "auto");
     await until(() => sidecar()?.ready === true, "ready");
-    expect(JSON.parse(spawns()[0]!.config!)).toEqual({ permission: { edit: "allow", bash: "ask" } });
+    expect(JSON.parse(spawns()[0]!.config!)).toEqual({ permission: { edit: "allow", bash: { "*": "ask" } } });
   });
 
   it("adds no ask rules for a bypass seat", async () => {

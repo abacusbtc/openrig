@@ -41,7 +41,7 @@ import {
   ACP_PROTOCOL_VERSION, OPENCODE_RUNNER_ERROR_MARKER, OPENCODE_RUNNER_EXIT_MARKER, OPENCODE_RUNNER_READY_MARKER,
   acpTextPrompt, buildOpencodeChildArgs, buildOpencodeChildEnv, buildPendingOpencodeRunnerState,
   encodeAcpError, encodeAcpNotification, encodeAcpRequest, encodeAcpResult,
-  isOpencodeModelId, isOpencodeSessionId, opencodeSeatPaths, parseOpencodeRunnerState,
+  isOpencodeModelId, isOpencodeSessionId, opencodeSeatPaths, parseOpencodeRunnerState, readOperatorOpencodePermission,
   type OpencodePosture, type OpencodeRunnerState,
 } from "./opencode-runner-protocol.js";
 
@@ -744,6 +744,9 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const childEnv = buildOpencodeChildEnv(process.env as Record<string, string | undefined>, {
     sessionName: args.sessionName,
     posture: args.posture,
+    operatorPermission: readOperatorOpencodePermission(process.env, (path) => {
+      try { return fs.readFileSync(path, "utf8"); } catch { return null; }
+    }),
     nodeId: process.env.OPENRIG_NODE_ID,
     openrigHome: process.env.OPENRIG_HOME,
     openrigUrl: endpoint?.baseUrl ?? process.env.OPENRIG_URL,

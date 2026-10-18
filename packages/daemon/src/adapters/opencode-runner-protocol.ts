@@ -115,7 +115,7 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function buildOpencodeChildEnv(
   source: Record<string, string | undefined>,
-  opts: { sessionName: string; posture: OpencodePosture; nodeId?: string; openrigHome?: string; openrigUrl?: string },
+  opts: { sessionName: string; posture: OpencodePosture; nodeId?: string; openrigHome?: string; openrigUrl?: string; operatorPermission?: unknown },
 ): Record<string, string> {
   const env: Record<string, string> = {};
   const passthrough = (source[OPENCODE_ENV_PASSTHROUGH_VAR] ?? "")
@@ -130,15 +130,91 @@ export function buildOpencodeChildEnv(
   if (opts.openrigHome) env.OPENRIG_HOME = opts.openrigHome;
   if (opts.openrigUrl) env.OPENRIG_URL = opts.openrigUrl;
   // The posture rides inline config, which opencode layers over the operator's own config files.
-  const config = buildOpencodePostureConfig(opts.posture);
+  const config = buildOpencodePostureConfig(opts.posture, opts.operatorPermission);
   if (config) env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
   return env;
 }
 
 /** The inline opencode config enforcing a posture, or null when opencode's defaults are the posture. */
-export function buildOpencodePostureConfig(posture: OpencodePosture): { permission: Record<string, string> } | null {
-  if (posture === "floor") return { permission: { edit: "ask", bash: "ask" } };
-  if (posture === "auto") return { permission: { edit: "allow", bash: "ask" } };
+export type OpencodePermissionValue = string | Record<string, string>;
+
+/** Drops // and block comments and trailing commas from JSONC, leaving string contents alone. */
+export function stripJsonc(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j;
+    } else if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      out += "\n";
+    } else if (ch === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 1;
+    } else {
+      out += ch;
+    }
+  }
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+
+/** The `permission` block of the operator's own opencode config (`opencode.jsonc`, then `opencode.json`,
+ *  under $XDG_CONFIG_HOME or ~/.config), or undefined when there is none or it does not parse. A broken
+ *  file never loosens a seat: the posture then simply has no operator rules. */
+export function readOperatorOpencodePermission(
+  env: Record<string, string | undefined>,
+  readFile: (path: string) => string | null,
+): unknown {
+  const base = env.XDG_CONFIG_HOME || (env.HOME ? nodePath.join(env.HOME, ".config") : undefined);
+  if (!base) return undefined;
+  for (const name of ["opencode.jsonc", "opencode.json"]) {
+    const text = readFile(nodePath.join(base, "opencode", name));
+    if (text === null) continue;
+    try {
+      return (JSON.parse(stripJsonc(text)) as { permission?: unknown }).permission;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** The pattern rules the operator saved under `permission.<tool>` in their own opencode config. Only
+ *  object-form entries count: a bare string is the operator's blanket default, which the posture
+ *  replaces. */
+export function operatorPermissionRules(operatorPermission: unknown, tool: "edit" | "bash"): Record<string, string> {
+  const entry = (operatorPermission as Record<string, unknown> | null | undefined)?.[tool];
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return {};
+  const rules: Record<string, string> = {};
+  for (const [pattern, action] of Object.entries(entry)) {
+    if (pattern !== "*" && (action === "allow" || action === "ask" || action === "deny")) rules[pattern] = action;
+  }
+  return rules;
+}
+
+/** A blanket "ask" as a pattern rule, then the operator's saved rules. opencode lets the last matching
+ *  rule win, so the catch-all goes first and an approval the operator saved still applies; a bare
+ *  "ask" string would replace those rules outright. */
+function askWithOperatorRules(rules: Record<string, string>): Record<string, string> {
+  return { "*": "ask", ...rules };
+}
+
+export function buildOpencodePostureConfig(
+  posture: OpencodePosture,
+  operatorPermission?: unknown,
+): { permission: Record<string, OpencodePermissionValue> } | null {
+  if (posture === "floor") {
+    return { permission: {
+      edit: askWithOperatorRules(operatorPermissionRules(operatorPermission, "edit")),
+      bash: askWithOperatorRules(operatorPermissionRules(operatorPermission, "bash")),
+    } };
+  }
+  if (posture === "auto") {
+    return { permission: { edit: "allow", bash: askWithOperatorRules(operatorPermissionRules(operatorPermission, "bash")) } };
+  }
   return null;
 }
 
