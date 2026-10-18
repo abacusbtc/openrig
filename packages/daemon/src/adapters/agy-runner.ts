@@ -107,13 +107,20 @@ export function mapAgyStepUpdate(step: Record<string, unknown>): AgyMapped {
 }
 
 /** The pane notice for tools agy auto-denied in headless mode. */
-export function deniedActionsNotice(denied: AgyDeniedAction[], posture: AgyPosture): string[] {
+export function deniedActionsNotice(denied: AgyDeniedAction[], posture: AgyPosture, at?: string): string[] {
   if (denied.length === 0) return [];
-  const lines = denied.slice(0, 5).map((d) => `${AGY_RUNNER_ERROR_MARKER} denied ${d.action}${d.display_name ? `: ${d.display_name}` : ""}`);
-  if (denied.length > 5) lines.push(`${AGY_RUNNER_ERROR_MARKER} ... and ${denied.length - 5} more denied`);
-  lines.push(posture === "full_bypass"
-    ? `${AGY_RUNNER_ERROR_MARKER} permissions were bypassed yet agy still denied these; check agy's own settings`
-    : `${AGY_RUNNER_ERROR_MARKER} headless agy cannot ask. Add a permissions.allow rule (for example command(<binary>)) to ~/.gemini/antigravity-cli/settings.json, or launch this seat with a wider permission posture`);
+  const when = at ? ` (turn ended ${at})` : "";
+  const lines = denied.slice(0, 5).map((d) => `${AGY_RUNNER_ERROR_MARKER} denied ${d.action}${d.display_name ? `: ${d.display_name}` : ""}${when}`);
+  if (denied.length > 5) lines.push(`${AGY_RUNNER_ERROR_MARKER} ... and ${denied.length - 5} more denied${when}`);
+  if (posture === "full_bypass") {
+    lines.push(`${AGY_RUNNER_ERROR_MARKER} permissions were bypassed yet agy still denied these; check agy's own settings`);
+    return lines;
+  }
+  // Name the rule that would allow the first denial. A command rule names the binary only.
+  const first = denied[0];
+  const target = first.display_name ? (first.action === "command" ? first.display_name.trim().split(/\s+/)[0] : first.display_name) : undefined;
+  const rule = target ? `${first.action}(${target})` : `${first.action}(<target>)`;
+  lines.push(`${AGY_RUNNER_ERROR_MARKER} headless agy cannot ask. To allow the first of these, add "${rule}" to permissions.allow in ~/.gemini/antigravity-cli/settings.json (the file is shared by every agy seat, so keep rules narrow); or launch this seat with a wider permission posture`);
   return lines;
 }
 
@@ -369,7 +376,7 @@ export class AgyRunnerCore {
       if (status === "ERROR" && error) this.io.mirrorLine(`[agy] ${error}`);
       return;
     }
-    for (const line of deniedActionsNotice(denied, this.identity.posture)) this.io.mirrorLine(line);
+    for (const line of deniedActionsNotice(denied, this.identity.posture, this.io.now())) this.io.mirrorLine(line);
     if (status === "ERROR") {
       this.io.mirrorLine(`${AGY_RUNNER_ERROR_MARKER} turn failed${error ? `: ${error}` : ""}`);
     } else if (!this.streamedThisTurn && typeof result.response === "string" && result.response.trim()) {

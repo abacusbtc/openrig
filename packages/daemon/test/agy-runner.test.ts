@@ -435,6 +435,15 @@ describe("deniedActionsNotice", () => {
     expect(lines.join("\n")).toContain("and 2 more denied");
     expect(lines.at(-1)).toContain("permissions.allow");
   });
+  it("names the exact rule: the binary for a command, the target for a path", () => {
+    expect(deniedActionsNotice([{ action: "command", display_name: "python3 -c 'print(1)'" }], "auto").at(-1)).toContain('"command(python3)"');
+    expect(deniedActionsNotice([{ action: "write_file", display_name: "/tmp/x.txt" }], "auto").at(-1)).toContain('"write_file(/tmp/x.txt)"');
+    expect(deniedActionsNotice([{ action: "command" }], "auto").at(-1)).toContain('"command(<target>)"');
+  });
+  it("stamps each denial with when the turn ended so old lines are recognisable", () => {
+    const lines = deniedActionsNotice([{ action: "command", display_name: "ls" }], "auto", "2026-10-19T08:00:00Z");
+    expect(lines[0]).toContain("turn ended 2026-10-19T08:00:00Z");
+  });
   it("says so when a bypassed seat is still denied", () => {
     expect(deniedActionsNotice([{ action: "command" }], "full_bypass").at(-1)).toContain("bypassed yet agy still denied");
   });
