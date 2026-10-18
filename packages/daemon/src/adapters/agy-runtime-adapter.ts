@@ -28,11 +28,11 @@ import { mergeManagedBlock } from "../domain/managed-blocks.js";
 import { observeAgyPermission } from "../domain/permission-drift.js";
 import {
   AGY_EFFORTS, AGY_INTERACTIVE_READY_TEXT, AGY_INTERACTIVE_TRUST_TEXT, agySeatPaths, buildAgyInteractiveCommand,
-  buildAgyRunnerCommand, buildPendingAgyRunnerState, parseAgyRunnerState, resolveAgyMode,
+  buildAgyRunnerCommand, buildPendingAgyRunnerState, parseAgyRunnerState,
   type AgyPosture, type AgyRunnerState,
 } from "./agy-runner-protocol.js";
 import {
-  agyInteractiveStatePath, defaultAgyConversationStore, findAgyConversation, parseAgyInteractiveState, waitForAgyPrompt,
+  agyInteractiveStatePath, defaultAgyConversationStore, findAgyConversation, parseAgyInteractiveState, resolveAgySeatMode, waitForAgyPrompt,
   type AgyConversationStore,
 } from "./agy-interactive.js";
 
@@ -221,7 +221,7 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
     }
 
     const sessionName = binding.tmuxSession;
-    if (resolveAgyMode(process.env) === "interactive") {
+    if ((await resolveAgySeatMode(this.tmux, sessionName)) === "interactive") {
       return this.launchInteractive(binding, sessionName, conversationId);
     }
     const paths = agySeatPaths(this.stateRoot, sessionName);
@@ -291,7 +291,7 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
     const paneCommand = (await this.tmux.getPaneCommand(binding.tmuxSession)) ?? "";
     // A login shell reports its name with a leading dash ("-bash").
     const atShell = SHELL_COMMANDS.has(paneCommand.replace(/^-/, ""));
-    if (resolveAgyMode(process.env) === "interactive") {
+    if ((await resolveAgySeatMode(this.tmux, binding.tmuxSession)) === "interactive") {
       return this.checkInteractiveReady(binding.tmuxSession, atShell);
     }
     const state = this.readRunnerState(binding.tmuxSession);

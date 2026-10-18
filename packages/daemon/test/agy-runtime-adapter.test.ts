@@ -2,7 +2,7 @@
 // command construction, launch-scoped sidecar readiness, token capture, posture, projection
 // and startup delivery are all fake-backed. The live leg is the dev-team seat test.
 
-import { agyInteractiveStatePath } from "../src/adapters/agy-interactive.js";
+import { agyInteractiveStatePath, resolveAgySeatMode } from "../src/adapters/agy-interactive.js";
 import { describe, it, expect, vi } from "vitest";
 import type { TmuxAdapter, TmuxResult } from "../src/adapters/tmux.js";
 import { AgyRuntimeAdapter, agyEffort, resolveAgyPosture, type AgyAdapterFsOps } from "../src/adapters/agy-runtime-adapter.js";
@@ -556,6 +556,31 @@ describe("agy interactive mode (OPENRIG_AGY_MODE=interactive)", () => {
       const tmux = mockTmux({ getPaneCommand: vi.fn(async () => "bash") });
       expect(await resumer(tmux).resume(SESSION, "agy_conversation_id", CONV, "/work")).toMatchObject({ ok: false, code: "resume_failed" });
     }));
+  });
+
+  describe("per-seat mode (the seat's own env in the rig spec)", () => {
+    const seatEnv = (value: string | undefined) => ({ getSessionEnv: vi.fn(async () => value) });
+    const daemon = (v?: string): NodeJS.ProcessEnv => (v ? { OPENRIG_AGY_MODE: v } : {});
+
+    it("a seat that sets interactive is interactive even when the daemon is headless", async () => {
+      expect(await resolveAgySeatMode(seatEnv("interactive"), SESSION, daemon())).toBe("interactive");
+    });
+    it("a seat that sets headless stays headless under an interactive daemon", async () => {
+      expect(await resolveAgySeatMode(seatEnv("headless"), SESSION, daemon("interactive"))).toBe("headless");
+    });
+    it("a seat with nothing set, or an unreadable session env, follows the daemon", async () => {
+      expect(await resolveAgySeatMode(seatEnv(undefined), SESSION, daemon("interactive"))).toBe("interactive");
+      expect(await resolveAgySeatMode(seatEnv(""), SESSION, daemon())).toBe("headless");
+      expect(await resolveAgySeatMode({ getSessionEnv: async () => { throw new Error("x"); } }, SESSION, daemon("interactive"))).toBe("interactive");
+      expect(await resolveAgySeatMode({}, SESSION, daemon())).toBe("headless");
+    });
+    it("launches interactively from the seat's env alone (no daemon setting)", async () => {
+      const tmux = mockTmux({ capturePaneContent: vi.fn(async () => "? for shortcuts") });
+      (tmux as unknown as { getSessionEnv: unknown }).getSessionEnv = vi.fn(async () => "interactive");
+      const result = await adapterWith(memFs(), tmux).launchHarness(binding(), { name: "x" });
+      expect(result.ok).toBe(true);
+      expect(tmux.sendShellCommand.mock.calls[0]![1]).toBe("agy");
+    });
   });
 });
 

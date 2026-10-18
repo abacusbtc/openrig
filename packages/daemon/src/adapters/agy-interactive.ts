@@ -9,7 +9,9 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import type { TmuxAdapter } from "./tmux.js";
-import { AGY_INTERACTIVE_READY_TEXT, AGY_INTERACTIVE_TRUST_TEXT, agySeatPaths } from "./agy-runner-protocol.js";
+import {
+  AGY_INTERACTIVE_READY_TEXT, AGY_INTERACTIVE_TRUST_TEXT, agySeatPaths, resolveAgyMode, type AgyMode,
+} from "./agy-runner-protocol.js";
 
 const SHELL_COMMANDS = new Set(["bash", "fish", "nu", "sh", "tmux", "zsh"]);
 const CONVERSATION_FILE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.db$/;
@@ -102,4 +104,20 @@ export async function waitForAgyPrompt(
     if (attempt < attempts - 1) await sleep(pollMs);
   }
   return { ok: false, kind: "timeout" };
+}
+
+/** The mode one seat runs in. A seat sets AGY_SEAT_MODE (interactive|headless) in its own `env:` in the rig
+ *  spec (OpenRig reserves OPENRIG_* names there, hence the different key), which lands in
+ *  the seat's tmux session environment; that wins in either direction. Without it the daemon's own
+ *  OPENRIG_AGY_MODE decides, so existing setups behave as before. */
+export async function resolveAgySeatMode(
+  tmux: Partial<Pick<TmuxAdapter, "getSessionEnv">>,
+  sessionName: string,
+  daemonEnv: NodeJS.ProcessEnv = process.env,
+): Promise<AgyMode> {
+  try {
+    const seatValue = await tmux.getSessionEnv?.(sessionName, "AGY_SEAT_MODE");
+    if (seatValue !== undefined && seatValue.trim() !== "") return resolveAgyMode({ OPENRIG_AGY_MODE: seatValue });
+  } catch { /* an unreadable session environment falls back to the daemon's setting */ }
+  return resolveAgyMode(daemonEnv);
 }

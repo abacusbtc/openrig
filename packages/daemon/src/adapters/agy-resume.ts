@@ -14,9 +14,9 @@ import type { SeatLaunchEnvironment } from "../domain/seat-launch-environment.js
 import type { ResumeResult } from "./claude-resume.js";
 import { resolveAgyPosture } from "./agy-runtime-adapter.js";
 import {
-  agySeatPaths, buildAgyInteractiveCommand, buildAgyRunnerCommand, buildPendingAgyRunnerState, parseAgyRunnerState, resolveAgyMode,
+  agySeatPaths, buildAgyInteractiveCommand, buildAgyRunnerCommand, buildPendingAgyRunnerState, parseAgyRunnerState,
 } from "./agy-runner-protocol.js";
-import { agyInteractiveStatePath, waitForAgyPrompt } from "./agy-interactive.js";
+import { agyInteractiveStatePath, resolveAgySeatMode, waitForAgyPrompt } from "./agy-interactive.js";
 import { validateResumeToken } from "../domain/resume-token-validation.js";
 import { observeAgyPermission } from "../domain/permission-drift.js";
 
@@ -81,7 +81,7 @@ export class AgyResumeAdapter {
     );
 
     const posture = resolveAgyPosture(process.env, resolvedPosture);
-    if (resolveAgyMode(process.env) === "interactive") {
+    if ((await resolveAgySeatMode(this.tmux, tmuxSessionName)) === "interactive") {
       return this.resumeInteractive(tmuxSessionName, conversationId, posture, model ?? undefined);
     }
     const cmd = buildAgyRunnerCommand({
