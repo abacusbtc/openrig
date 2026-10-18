@@ -327,4 +327,18 @@ describe("ACTIVITY D1+D2 — motion folded into the ladder", () => {
     });
     expect(activity.state).toBe("running");
   });
+
+  it("[agy] a pane-confirmed idle agy console stays idle under live motion (its idle prompt repaints), claude does not", async () => {
+    const deps = () => ({
+      tmuxAdapter: mkTmux({ captures: 0 }),
+      activityStore: store(null),
+      structuralActivity: mkStructural("agent_idle"),
+      seatActivity: mkMotion(true),
+    });
+    expect((await activityOf(deps(), "agy")).state).toBe("idle");
+    expect((await activityOf(deps(), "claude-code")).state).toBe("running");
+    // …but agy's needs_input / unknown readings are unaffected: unknown still upgrades on motion.
+    expect((await activityOf({ ...deps(), structuralActivity: mkStructural(null) }, "agy")).state).toBe("running");
+  });
 });
+

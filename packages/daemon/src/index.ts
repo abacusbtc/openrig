@@ -352,6 +352,7 @@ export async function startServer(port?: number) {
         // Persists the per-seat pane PID/command verdict so node-inventory
         // gates the running/active projection on verified process identity.
         deps.seatIdentityReconciler?.start();
+        deps.agyInteractiveTokenService?.start();
         startPeriodicSnapshotScheduler(deps);
         // OPR.0.4.6.FS-1 W2 — boot sweep + daily retention tick (bounded,
         // yields between batches; a sweep failure is logged, never fatal).
@@ -398,6 +399,7 @@ export async function startServer(port?: number) {
       ["seat-activity", () => deps.seatActivityService?.stop()],
       ["seat-structural-activity", () => deps.seatStructuralActivityService?.stop()],
       ["seat-identity", () => deps.seatIdentityReconciler?.stop()],
+      ["agy-interactive-token", () => deps.agyInteractiveTokenService?.stop()],
       ["periodic-snapshot", () => deps.periodicSnapshotScheduler?.stop()],
       ["gateway", () => deps.gatewaySubsystem?.stop()],
       ["wake-ladder", () => wakeLadderScheduler?.stop()],

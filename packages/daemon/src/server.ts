@@ -194,6 +194,8 @@ export interface AppDeps {
   seatStructuralActivityService?: import("./domain/seat-structural-activity-service.js").SeatStructuralActivityService;
   /** OPR.0.4.3.19 — periodic liveness identity reconciler (started post-bind). */
   seatIdentityReconciler?: import("./domain/seat-identity-reconciler.js").SeatIdentityReconciler;
+  /** Fills an interactive agy seat's resume token once its first turn has created the conversation. */
+  agyInteractiveTokenService?: import("./domain/agy-interactive-token-service.js").AgyInteractiveTokenService;
   psProjectionService: PsProjectionService;
   upRouter: UpCommandRouter;
   teardownOrchestrator: RigTeardownOrchestrator;
