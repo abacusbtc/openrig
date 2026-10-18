@@ -2,6 +2,7 @@
 // command construction, launch-scoped sidecar readiness, token capture, posture, projection
 // and startup delivery are all fake-backed. The live leg is the dev-team seat test.
 
+import { agyInteractiveStatePath } from "../src/adapters/agy-interactive.js";
 import { describe, it, expect, vi } from "vitest";
 import type { TmuxAdapter, TmuxResult } from "../src/adapters/tmux.js";
 import { AgyRuntimeAdapter, agyEffort, resolveAgyPosture, type AgyAdapterFsOps } from "../src/adapters/agy-runtime-adapter.js";
@@ -487,4 +488,74 @@ describe("agy interactive mode (OPENRIG_AGY_MODE=interactive)", () => {
     const atShell = mockTmux({ getPaneCommand: vi.fn(async () => "-zsh") });
     expect(await adapterWith(memFs(), atShell).checkReady(binding())).toMatchObject({ ready: false, code: "runner_exited" });
   }));
+
+  describe("conversation id capture", () => {
+    const store = (files: Array<[string, number]>) => ({
+      dir: "/conv",
+      list: () => files.map(([name, createdMs]) => ({ name, createdMs })),
+    });
+    const adapterWithStore = (fs: AgyAdapterFsOps, tmux: TmuxAdapter, s: ReturnType<typeof store>) =>
+      new AgyRuntimeAdapter({ tmux, fsOps: fs, stateRoot: STATE_ROOT, runnerEntryPath: RUNNER, sleep: async () => {}, conversations: s });
+    const launched = async (fs: ReturnType<typeof memFs>, s: ReturnType<typeof store>) => {
+      const adapter = adapterWithStore(fs, mockTmux({ capturePaneContent: vi.fn(async () => "? for shortcuts") }), s);
+      await adapter.launchHarness(binding(), { name: "x" });
+      return adapter;
+    };
+    const at = () => JSON.parse(Object.entries(memoryFiles).find(([k]) => k.endsWith("interactive.json"))![1]).launchedAtMs as number;
+    let memoryFiles: Record<string, string> = {};
+
+    it("has no id before the first turn, then takes the one conversation created after launch", () => withMode(async () => {
+      const fs = memFs(); memoryFiles = fs.files;
+      const files: Array<[string, number]> = [[`${OTHER}.db`, 1000]];
+      const s = store(files);
+      const adapter = await launched(fs, s);
+      expect(adapter.readSessionFile(SESSION)).toEqual({ ok: false, reason: "missing_sidecar" });
+      files.push([`${CONV}.db`, at() + 5000]);
+      expect(adapter.readSessionFile(SESSION)).toEqual({ ok: true, sessionFile: CONV });
+    }));
+
+    it("reports none when two conversations appeared, rather than guess", () => withMode(async () => {
+      const fs = memFs(); memoryFiles = fs.files;
+      const files: Array<[string, number]> = [];
+      const adapter = await launched(fs, store(files));
+      files.push([`${CONV}.db`, at() + 10], [`${OTHER}.db`, at() + 20], ["notes.txt", at() + 30]);
+      expect(adapter.readSessionFile(SESSION)).toEqual({ ok: false, reason: "ambiguous" });
+    }));
+
+    it("uses the id it was resumed on, without scanning", () => withMode(async () => {
+      const fs = memFs(); memoryFiles = fs.files;
+      const adapter = adapterWithStore(fs, mockTmux({ capturePaneContent: vi.fn(async () => "? for shortcuts") }), store([[`${OTHER}.db`, 9e15]]));
+      await adapter.launchHarness(binding(), { name: "x", resumeToken: CONV });
+      expect(adapter.readSessionFile(SESSION)).toEqual({ ok: true, sessionFile: CONV });
+    }));
+
+    it("goes back to the runner sidecar after a headless launch", async () => {
+      const fs = memFs(); memoryFiles = fs.files;
+      fs.files[agyInteractiveStatePath(STATE_ROOT, SESSION)] = JSON.stringify({ mode: "interactive", launchedAtMs: 1 });
+      const tmux = runnerThatWrites(fs, (id) => JSON.stringify({ launchId: id, ready: true, conversationId: CONV, updatedAt: "t" }));
+      const adapter = adapterWithStore(fs, tmux, store([]));
+      await adapter.launchHarness(binding(), { name: "x" });
+      expect(adapter.readSessionFile(SESSION)).toEqual({ ok: true, sessionFile: CONV });
+    });
+  });
+
+  describe("resume", () => {
+    const resumer = (tmux: TmuxAdapter, fs = memFs()) =>
+      new AgyResumeAdapter(tmux, fs, { stateRoot: STATE_ROOT, runnerEntryPath: RUNNER }, { sleep: async () => {} });
+
+    it("restarts agy on the saved conversation and proves it by the console prompt", () => withMode(async () => {
+      const tmux = mockTmux({ capturePaneContent: vi.fn(async () => "? for shortcuts") });
+      const fs = memFs();
+      const result = await resumer(tmux, fs).resume(SESSION, "agy_conversation_id", CONV, "/work");
+      expect(result.ok).toBe(true);
+      expect(tmux.sendShellCommand.mock.calls[0]![1]).toBe(`agy --conversation '${CONV}'`);
+      expect(JSON.parse(fs.files[agyInteractiveStatePath(STATE_ROOT, SESSION)]!)).toMatchObject({ mode: "interactive", conversationId: CONV });
+    }));
+
+    it("fails honestly when the pane goes back to a shell", () => withMode(async () => {
+      const tmux = mockTmux({ getPaneCommand: vi.fn(async () => "bash") });
+      expect(await resumer(tmux).resume(SESSION, "agy_conversation_id", CONV, "/work")).toMatchObject({ ok: false, code: "resume_failed" });
+    }));
+  });
 });
+

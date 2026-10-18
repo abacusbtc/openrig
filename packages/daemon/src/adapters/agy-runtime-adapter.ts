@@ -31,6 +31,10 @@ import {
   buildAgyRunnerCommand, buildPendingAgyRunnerState, parseAgyRunnerState, resolveAgyMode,
   type AgyPosture, type AgyRunnerState,
 } from "./agy-runner-protocol.js";
+import {
+  agyInteractiveStatePath, defaultAgyConversationStore, findAgyConversation, parseAgyInteractiveState, waitForAgyPrompt,
+  type AgyConversationStore,
+} from "./agy-interactive.js";
 
 const SHELL_COMMANDS = new Set(["bash", "fish", "nu", "sh", "tmux", "zsh"]);
 
@@ -55,6 +59,8 @@ export interface AgyRuntimeAdapterDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Launch-attempt id minting (tests inject; defaults to randomUUID). */
   newLaunchId?: () => string;
+  /** Where interactive seats' conversations are found (tests inject; defaults to ~/.gemini/antigravity-cli). */
+  conversations?: AgyConversationStore;
 }
 
 /** The posture an agy seat launches with: an explicit resolved policy is authoritative in
@@ -79,6 +85,7 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
   private runnerEntryPath: string;
   private sleep: (ms: number) => Promise<void>;
   private newLaunchId: () => string;
+  private conversations: AgyConversationStore;
 
   constructor(deps: AgyRuntimeAdapterDeps) {
     this.tmux = deps.tmux;
@@ -88,11 +95,24 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
     this.runnerEntryPath = deps.runnerEntryPath;
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.newLaunchId = deps.newLaunchId ?? (() => randomUUID());
+    this.conversations = deps.conversations ?? defaultAgyConversationStore();
   }
 
   /** The runner-sidecar reader shape resume-token-capture consumes. The conversation id rides in
    *  the `sessionFile` slot, which that interface names for the Pi/OMP token it was built for. */
   readSessionFile(sessionName: string): { ok: true; sessionFile: string } | { ok: false; reason: string } {
+    const interactivePath = agyInteractiveStatePath(this.stateRoot, sessionName);
+    if (this.fs.exists(interactivePath)) {
+      let text = "";
+      try { text = this.fs.readFile(interactivePath); } catch { /* unreadable: treated as parse_error below */ }
+      // A headless launch overwrites the marker, so a seat switched back to the runner reads its sidecar.
+      if (!text.includes('"headless"')) {
+        const interactive = parseAgyInteractiveState(text);
+        if (!interactive) return { ok: false, reason: "parse_error" };
+        const found = findAgyConversation(interactive, this.conversations);
+        return found.ok ? { ok: true, sessionFile: found.conversationId } : { ok: false, reason: found.reason };
+      }
+    }
     const state = this.readRunnerState(sessionName);
     if (state === null) {
       return this.fs.exists(agySeatPaths(this.stateRoot, sessionName).runnerStatePath)
@@ -210,6 +230,9 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
     // Launch-attempt scoping: overwrite any stale sidecar with a pending record BEFORE the
     // command is typed, and trust only sidecar states stamped with THIS attempt's launchId.
     const launchId = this.newLaunchId();
+    if (this.fs.exists(agyInteractiveStatePath(this.stateRoot, sessionName))) {
+      this.fs.writeFile(agyInteractiveStatePath(this.stateRoot, sessionName), JSON.stringify({ mode: "headless" }));
+    }
     const prior = this.readRunnerState(sessionName);
     this.fs.writeFile(
       paths.runnerStatePath,
@@ -302,13 +325,19 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
 
   // ── interactive mode ───────────────────────────────────────────────────────
 
-  /** Slice 1: fresh or resumed start of agy's own console. Readiness is the pane (agy is the
-   *  foreground process and shows its input hint); there is no runner sidecar, so the resume
-   *  token is not captured yet and none is returned. */
+  /** Fresh or resumed start of agy's own console. Readiness is the pane (agy is the foreground
+   *  process and shows its input hint). There is no runner sidecar, so the launch records
+   *  interactive.json and the conversation id is found later from agy's conversations dir
+   *  (see agy-interactive.ts). */
   private async launchInteractive(binding: NodeBinding, sessionName: string, conversationId?: string): Promise<HarnessLaunchResult> {
     const posture = resolveAgyPosture(process.env, binding.launchPosture);
     const cmd = buildAgyInteractiveCommand({ posture, model: binding.model, effort: agyEffort(binding.effort), conversationId });
     const appliedLaunch = observeAgyPermission(posture);
+    this.fs.mkdirp(agySeatPaths(this.stateRoot, sessionName).seatRoot);
+    this.fs.writeFile(
+      agyInteractiveStatePath(this.stateRoot, sessionName),
+      JSON.stringify({ mode: "interactive", launchedAtMs: Date.now(), ...(conversationId ? { conversationId } : {}) }),
+    );
     const command = this.seatLaunchEnvironment
       ? await this.seatLaunchEnvironment.command(sessionName, cmd, { nodeId: binding.nodeId, generation: binding.launchGeneration, runtime: "agy" })
       : cmd;
@@ -318,34 +347,18 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
     }
     if (!textResult.ok) return { ok: false, error: `Failed to send launch command: ${textResult.message}` };
 
-    const pollMs = 250;
-    const attempts = 120; // ~30s, covers a cold start
-    const shellGraceAttempts = 12;
-    let atShellInARow = 0;
-    for (let attempt = 0; attempt < attempts; attempt++) {
-      const paneContent = (await this.tmux.capturePaneContent(sessionName, 40)) ?? "";
-      if (paneContent.includes(AGY_INTERACTIVE_TRUST_TEXT)) {
-        return {
-          ok: false,
-          error: `agy launch: ${binding.cwd} is not a trusted agy workspace; add it to trustedWorkspaces in ~/.gemini/antigravity-cli/settings.json`,
-          recovery: "attention_required",
-          evidence: paneContent.split("\n").slice(-12).join("\n"),
-        };
-      }
-      if (paneContent.includes(AGY_INTERACTIVE_READY_TEXT)) return { ok: true, appliedLaunch };
-      if (attempt >= shellGraceAttempts) {
-        const paneCommand = ((await this.tmux.getPaneCommand(sessionName)) ?? "").replace(/^-/, "");
-        atShellInARow = SHELL_COMMANDS.has(paneCommand) ? atShellInARow + 1 : 0;
-        if (atShellInARow >= 2) {
-          return {
-            ok: false,
-            error: "agy launch failed: the pane returned to a shell before agy showed its prompt",
-            recovery: "attention_required",
-            evidence: paneContent.split("\n").slice(-12).join("\n"),
-          };
-        }
-      }
-      if (attempt < attempts - 1) await this.sleep(pollMs);
+    const wait = await waitForAgyPrompt(this.tmux, sessionName, this.sleep);
+    if (wait.ok) return { ok: true, appliedLaunch };
+    if (wait.kind === "trust") {
+      return {
+        ok: false,
+        error: `agy launch: ${binding.cwd} is not a trusted agy workspace; add it to trustedWorkspaces in ~/.gemini/antigravity-cli/settings.json`,
+        recovery: "attention_required",
+        evidence: wait.evidence,
+      };
+    }
+    if (wait.kind === "shell") {
+      return { ok: false, error: "agy launch failed: the pane returned to a shell before agy showed its prompt", recovery: "attention_required", evidence: wait.evidence };
     }
     return { ok: false, error: "agy launch: timed out waiting for agy to show its prompt", recovery: "attention_required" };
   }

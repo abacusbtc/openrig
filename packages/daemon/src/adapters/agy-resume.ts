@@ -13,7 +13,10 @@ import type { TmuxAdapter } from "./tmux.js";
 import type { SeatLaunchEnvironment } from "../domain/seat-launch-environment.js";
 import type { ResumeResult } from "./claude-resume.js";
 import { resolveAgyPosture } from "./agy-runtime-adapter.js";
-import { agySeatPaths, buildAgyRunnerCommand, buildPendingAgyRunnerState, parseAgyRunnerState } from "./agy-runner-protocol.js";
+import {
+  agySeatPaths, buildAgyInteractiveCommand, buildAgyRunnerCommand, buildPendingAgyRunnerState, parseAgyRunnerState, resolveAgyMode,
+} from "./agy-runner-protocol.js";
+import { agyInteractiveStatePath, waitForAgyPrompt } from "./agy-interactive.js";
 import { validateResumeToken } from "../domain/resume-token-validation.js";
 import { observeAgyPermission } from "../domain/permission-drift.js";
 
@@ -78,6 +81,9 @@ export class AgyResumeAdapter {
     );
 
     const posture = resolveAgyPosture(process.env, resolvedPosture);
+    if (resolveAgyMode(process.env) === "interactive") {
+      return this.resumeInteractive(tmuxSessionName, conversationId, posture, model ?? undefined);
+    }
     const cmd = buildAgyRunnerCommand({
       runnerEntryPath: this.paths.runnerEntryPath,
       sessionName: tmuxSessionName,
@@ -102,6 +108,36 @@ export class AgyResumeAdapter {
     }
     const result = await this.verifyResume(tmuxSessionName, conversationId, launchId);
     return result.ok ? { ...result, appliedLaunch } : result;
+  }
+
+  /** Interactive seats resume as `agy --conversation <id>` in the pane; proof is the console's prompt. */
+  private async resumeInteractive(
+    tmuxSessionName: string,
+    conversationId: string,
+    posture: ReturnType<typeof resolveAgyPosture>,
+    model: string | undefined,
+  ): Promise<ResumeResult> {
+    const cmd = buildAgyInteractiveCommand({ posture, model, conversationId });
+    const appliedLaunch = observeAgyPermission(posture);
+    this.fs.mkdirp(agySeatPaths(this.paths.stateRoot, tmuxSessionName).seatRoot);
+    this.fs.writeFile(
+      agyInteractiveStatePath(this.paths.stateRoot, tmuxSessionName),
+      JSON.stringify({ mode: "interactive", launchedAtMs: Date.now(), conversationId }),
+    );
+    const command = this.options.seatLaunchEnvironment
+      ? await this.options.seatLaunchEnvironment.command(tmuxSessionName, cmd, { runtime: "agy" })
+      : cmd;
+    let textResult = await this.tmux.sendShellCommand(tmuxSessionName, command, undefined, { stageIfLong: true, execInScript: true });
+    if (!textResult.ok && textResult.code === "launch_path_too_long" && command !== cmd) {
+      textResult = await this.tmux.sendShellCommand(tmuxSessionName, cmd, undefined, { stageIfLong: true, execInScript: true });
+    }
+    if (!textResult.ok) return { ok: false, code: "resume_failed", message: textResult.message };
+    const wait = await waitForAgyPrompt(this.tmux, tmuxSessionName, this.options.sleep ?? sleep);
+    if (wait.ok) return { ok: true, appliedLaunch };
+    const why = wait.kind === "trust" ? "the workspace is not trusted by agy (see trustedWorkspaces)"
+      : wait.kind === "shell" ? "the pane returned to a shell before agy showed its prompt"
+      : "timed out waiting for agy to show its prompt";
+    return { ok: false, code: "resume_failed", message: `agy resume failed: ${why}`, evidence: wait.evidence } as ResumeResult;
   }
 
   // Poll the runner's launch-scoped sidecar only, never stale pane scrollback.
