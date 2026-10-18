@@ -437,3 +437,54 @@ describe("AgyResumeAdapter", () => {
   });
 });
 
+
+describe("agy interactive mode (OPENRIG_AGY_MODE=interactive)", () => {
+  const withMode = async (fn: () => Promise<void>) => {
+    const prior = process.env.OPENRIG_AGY_MODE;
+    process.env.OPENRIG_AGY_MODE = "interactive";
+    try { await fn(); } finally { if (prior === undefined) delete process.env.OPENRIG_AGY_MODE; else process.env.OPENRIG_AGY_MODE = prior; }
+  };
+
+  it("resolves the mode from the environment, headless by default", async () => {
+    const { resolveAgyMode } = await import("../src/adapters/agy-runner-protocol.js");
+    expect(resolveAgyMode({})).toBe("headless");
+    expect(resolveAgyMode({ OPENRIG_AGY_MODE: "Interactive" })).toBe("interactive");
+    expect(resolveAgyMode({ OPENRIG_AGY_MODE: "bogus" })).toBe("headless");
+  });
+
+  it("builds the plain agy command: no runner, posture and resume flags only", async () => {
+    const { buildAgyInteractiveCommand } = await import("../src/adapters/agy-runner-protocol.js");
+    expect(buildAgyInteractiveCommand({ posture: "floor" })).toBe("agy");
+    expect(buildAgyInteractiveCommand({ posture: "full_bypass", model: "m", effort: "high", conversationId: CONV }))
+      .toBe(`agy --dangerously-skip-permissions --model 'm' --effort 'high' --conversation '${CONV}'`);
+    expect(buildAgyInteractiveCommand({ posture: "auto" })).toBe("agy --mode auto");
+  });
+
+  it("launches agy itself and is ready when the console shows its prompt", () => withMode(async () => {
+    const tmux = mockTmux({ capturePaneContent: vi.fn(async () => "> \n? for shortcuts   Gemini 3.8 Flash") });
+    const result = await adapterWith(memFs(), tmux).launchHarness(binding(), { name: "x" });
+    expect(result.ok).toBe(true);
+    expect(tmux.sendShellCommand.mock.calls[0]![1]).toBe("agy");
+    expect(tmux.sendShellCommand.mock.calls[0]![1]).not.toContain("agy-runner");
+  }));
+
+  it("stops with attention_required on the folder-trust prompt", () => withMode(async () => {
+    const tmux = mockTmux({ capturePaneContent: vi.fn(async () => "Do you trust the contents of this project?\n> Yes, I trust this folder") });
+    const result = await adapterWith(memFs(), tmux).launchHarness(binding(), { name: "x" });
+    expect(result).toMatchObject({ ok: false, recovery: "attention_required" });
+    expect((result as { error: string }).error).toContain("trustedWorkspaces");
+  }));
+
+  it("fails fast when the pane falls back to a shell", () => withMode(async () => {
+    const tmux = mockTmux({ getPaneCommand: vi.fn(async () => "bash") });
+    const result = await adapterWith(memFs(), tmux).launchHarness(binding(), { name: "x" });
+    expect(result).toMatchObject({ ok: false, recovery: "attention_required" });
+  }));
+
+  it("checkReady reads the pane, not a sidecar", () => withMode(async () => {
+    const up = mockTmux({ getPaneCommand: vi.fn(async () => "agy"), capturePaneContent: vi.fn(async () => "? for shortcuts") });
+    expect(await adapterWith(memFs(), up).checkReady(binding())).toEqual({ ready: true });
+    const atShell = mockTmux({ getPaneCommand: vi.fn(async () => "-zsh") });
+    expect(await adapterWith(memFs(), atShell).checkReady(binding())).toMatchObject({ ready: false, code: "runner_exited" });
+  }));
+});

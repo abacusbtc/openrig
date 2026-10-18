@@ -169,3 +169,39 @@ export function buildAgyChildArgs(opts: {
 export function encodeAgyUserMessage(text: string): string {
   return `${JSON.stringify({ event: "user", message: { content: text } })}\n`;
 }
+
+// ── Interactive mode ─────────────────────────────────────────────────────────
+
+/** How an agy seat runs: "headless" drives agy over stream-json through the runner (default);
+ *  "interactive" runs agy's own console in the pane, so the operator can attach, approve a tool
+ *  request in place and choose "always allow" (agy persists that to its settings.json). */
+export type AgyMode = "headless" | "interactive";
+
+/** OPENRIG_AGY_MODE=interactive opts every agy seat into the console; anything else is headless. */
+export function resolveAgyMode(env: NodeJS.ProcessEnv): AgyMode {
+  return env.OPENRIG_AGY_MODE?.trim().toLowerCase() === "interactive" ? "interactive" : "headless";
+}
+
+export interface AgyInteractiveLaunchOpts {
+  posture: AgyPosture;
+  model?: string;
+  effort?: string;
+  /** Exact conversation to resume; becomes `--conversation <id>`. */
+  conversationId?: string;
+}
+
+/** The command typed into the seat's pane for an interactive seat: agy itself, no runner. Unlike
+ *  the headless child it can ask, so only full_bypass changes the permission flag. */
+export function buildAgyInteractiveCommand(opts: AgyInteractiveLaunchOpts): string {
+  const parts = ["agy"];
+  if (opts.posture === "full_bypass") parts.push("--dangerously-skip-permissions");
+  else if (opts.posture === "auto") parts.push("--mode", "auto");
+  if (opts.model?.trim()) parts.push("--model", shellQuote(opts.model.trim()));
+  if (opts.effort?.trim()) parts.push("--effort", shellQuote(opts.effort.trim()));
+  if (opts.conversationId) parts.push("--conversation", shellQuote(opts.conversationId));
+  return parts.join(" ");
+}
+
+/** Pane text that says agy is up and waiting for input, or stopped on its folder-trust gate. */
+export const AGY_INTERACTIVE_READY_TEXT = "? for shortcuts";
+export const AGY_INTERACTIVE_TRUST_TEXT = "Do you trust the contents of this project?";

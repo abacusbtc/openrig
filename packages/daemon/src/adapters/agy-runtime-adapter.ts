@@ -27,7 +27,8 @@ import { validateResumeToken } from "../domain/resume-token-validation.js";
 import { mergeManagedBlock } from "../domain/managed-blocks.js";
 import { observeAgyPermission } from "../domain/permission-drift.js";
 import {
-  AGY_EFFORTS, agySeatPaths, buildAgyRunnerCommand, buildPendingAgyRunnerState, parseAgyRunnerState,
+  AGY_EFFORTS, AGY_INTERACTIVE_READY_TEXT, AGY_INTERACTIVE_TRUST_TEXT, agySeatPaths, buildAgyInteractiveCommand,
+  buildAgyRunnerCommand, buildPendingAgyRunnerState, parseAgyRunnerState, resolveAgyMode,
   type AgyPosture, type AgyRunnerState,
 } from "./agy-runner-protocol.js";
 
@@ -200,6 +201,9 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
     }
 
     const sessionName = binding.tmuxSession;
+    if (resolveAgyMode(process.env) === "interactive") {
+      return this.launchInteractive(binding, sessionName, conversationId);
+    }
     const paths = agySeatPaths(this.stateRoot, sessionName);
     this.fs.mkdirp(paths.seatRoot);
 
@@ -264,6 +268,9 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
     const paneCommand = (await this.tmux.getPaneCommand(binding.tmuxSession)) ?? "";
     // A login shell reports its name with a leading dash ("-bash").
     const atShell = SHELL_COMMANDS.has(paneCommand.replace(/^-/, ""));
+    if (resolveAgyMode(process.env) === "interactive") {
+      return this.checkInteractiveReady(binding.tmuxSession, atShell);
+    }
     const state = this.readRunnerState(binding.tmuxSession);
     if (state?.exited) {
       return { ready: false, reason: `agy-runner exited (code ${state.exited.code ?? "unknown"})`, code: "runner_exited" };
@@ -291,6 +298,67 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
       return { ready: true };
     }
     return { ready: false, reason: "agy-runner has not reported ready yet", code: "awaiting_runtime" };
+  }
+
+  // ── interactive mode ───────────────────────────────────────────────────────
+
+  /** Slice 1: fresh or resumed start of agy's own console. Readiness is the pane (agy is the
+   *  foreground process and shows its input hint); there is no runner sidecar, so the resume
+   *  token is not captured yet and none is returned. */
+  private async launchInteractive(binding: NodeBinding, sessionName: string, conversationId?: string): Promise<HarnessLaunchResult> {
+    const posture = resolveAgyPosture(process.env, binding.launchPosture);
+    const cmd = buildAgyInteractiveCommand({ posture, model: binding.model, effort: agyEffort(binding.effort), conversationId });
+    const appliedLaunch = observeAgyPermission(posture);
+    const command = this.seatLaunchEnvironment
+      ? await this.seatLaunchEnvironment.command(sessionName, cmd, { nodeId: binding.nodeId, generation: binding.launchGeneration, runtime: "agy" })
+      : cmd;
+    let textResult = await this.tmux.sendShellCommand(sessionName, command, undefined, { stageIfLong: true, execInScript: true });
+    if (!textResult.ok && textResult.code === "launch_path_too_long" && command !== cmd) {
+      textResult = await this.tmux.sendShellCommand(sessionName, cmd, undefined, { stageIfLong: true, execInScript: true });
+    }
+    if (!textResult.ok) return { ok: false, error: `Failed to send launch command: ${textResult.message}` };
+
+    const pollMs = 250;
+    const attempts = 120; // ~30s, covers a cold start
+    const shellGraceAttempts = 12;
+    let atShellInARow = 0;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const paneContent = (await this.tmux.capturePaneContent(sessionName, 40)) ?? "";
+      if (paneContent.includes(AGY_INTERACTIVE_TRUST_TEXT)) {
+        return {
+          ok: false,
+          error: `agy launch: ${binding.cwd} is not a trusted agy workspace; add it to trustedWorkspaces in ~/.gemini/antigravity-cli/settings.json`,
+          recovery: "attention_required",
+          evidence: paneContent.split("\n").slice(-12).join("\n"),
+        };
+      }
+      if (paneContent.includes(AGY_INTERACTIVE_READY_TEXT)) return { ok: true, appliedLaunch };
+      if (attempt >= shellGraceAttempts) {
+        const paneCommand = ((await this.tmux.getPaneCommand(sessionName)) ?? "").replace(/^-/, "");
+        atShellInARow = SHELL_COMMANDS.has(paneCommand) ? atShellInARow + 1 : 0;
+        if (atShellInARow >= 2) {
+          return {
+            ok: false,
+            error: "agy launch failed: the pane returned to a shell before agy showed its prompt",
+            recovery: "attention_required",
+            evidence: paneContent.split("\n").slice(-12).join("\n"),
+          };
+        }
+      }
+      if (attempt < attempts - 1) await this.sleep(pollMs);
+    }
+    return { ok: false, error: "agy launch: timed out waiting for agy to show its prompt", recovery: "attention_required" };
+  }
+
+  private async checkInteractiveReady(sessionName: string, atShell: boolean): Promise<ReadinessResult> {
+    if (atShell) return { ready: false, reason: "agy is not running; the pane is back at a shell", code: "runner_exited" };
+    const paneContent = (await this.tmux.capturePaneContent(sessionName, 40)) ?? "";
+    if (paneContent.includes(AGY_INTERACTIVE_TRUST_TEXT)) {
+      return { ready: false, reason: "agy is waiting on its folder-trust prompt", code: "awaiting_runtime" };
+    }
+    return paneContent.includes(AGY_INTERACTIVE_READY_TEXT)
+      ? { ready: true }
+      : { ready: false, reason: "agy has not shown its prompt yet", code: "awaiting_runtime" };
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
