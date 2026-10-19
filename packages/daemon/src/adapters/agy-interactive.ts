@@ -25,11 +25,14 @@ export interface AgyConversationFile {
 export interface AgyConversationStore {
   dir: string;
   list(dir: string): AgyConversationFile[];
+  /** Text of a file (agy's per-process log); empty when unreadable. */
+  readText?(path: string): string;
 }
 
 export function defaultAgyConversationStore(home = process.env.HOME ?? ""): AgyConversationStore {
   return {
     dir: nodePath.join(home, ".gemini", "antigravity-cli", "conversations"),
+    readText: (path) => { try { return fs.readFileSync(path, "utf8"); } catch { return ""; } },
     list: (dir) => {
       try {
         return fs.readdirSync(dir).flatMap((name) => {
@@ -49,6 +52,9 @@ export interface AgyInteractiveState {
   launchedAtMs: number;
   /** Set when the seat was started on a known conversation (resume). */
   conversationId?: string;
+  /** agy's own per-process log (cli-<time>.log). It names the conversation its process took part in, which
+   *  tells seats apart when several took their first turn in the same window. */
+  logPath?: string;
 }
 
 export function agyInteractiveStatePath(stateRoot: string, sessionName: string): string {
@@ -59,7 +65,7 @@ export function parseAgyInteractiveState(text: string): AgyInteractiveState | nu
   try {
     const v = JSON.parse(text) as Partial<AgyInteractiveState>;
     if (v?.mode !== "interactive" || typeof v.launchedAtMs !== "number") return null;
-    return { mode: "interactive", launchedAtMs: v.launchedAtMs, ...(typeof v.conversationId === "string" ? { conversationId: v.conversationId } : {}) };
+    return { mode: "interactive", launchedAtMs: v.launchedAtMs, ...(typeof v.conversationId === "string" ? { conversationId: v.conversationId } : {}), ...(typeof v.logPath === "string" ? { logPath: v.logPath } : {}) };
   } catch { return null; }
 }
 
@@ -73,8 +79,47 @@ export function findAgyConversation(
   const fresh = store.list(store.dir)
     .flatMap((f) => { const m = CONVERSATION_FILE.exec(f.name); return m && f.createdMs >= state.launchedAtMs - 1000 ? [m[1]!] : []; });
   if (fresh.length === 0) return { ok: false, reason: "missing_sidecar" };
-  if (fresh.length > 1) return { ok: false, reason: "ambiguous" };
+  if (fresh.length > 1) {
+    const own = state.logPath && store.readText ? conversationFromLog(store.readText(state.logPath), fresh) : null;
+    return own ? { ok: true, conversationId: own } : { ok: false, reason: "ambiguous" };
+  }
   return { ok: true, conversationId: fresh[0]! };
+}
+
+const UUID_ANYWHERE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+
+/** The candidate that the seat's own log mentions most, or null when none is mentioned or two tie. */
+export function conversationFromLog(log: string, candidates: string[]): string | null {
+  const counts = new Map<string, number>();
+  for (const id of log.match(UUID_ANYWHERE) ?? []) if (candidates.includes(id)) counts.set(id, (counts.get(id) ?? 0) + 1);
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  if (ranked.length === 0) return null;
+  return ranked.length > 1 && ranked[1]![1] === ranked[0]![1] ? null : ranked[0]![0];
+}
+
+/** agy's log file for the agy process under a pane's shell (the log is that process's stdout). Linux /proc only. */
+export function findAgyLogPath(panePid: number, procRoot = "/proc"): string | null {
+  const LOG = /\/antigravity-cli\/log\/[^/]+\.log$/;
+  const queue = [panePid];
+  const seen = new Set<number>();
+  while (queue.length > 0 && seen.size < 64) {
+    const pid = queue.shift()!;
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    try {
+      const target = fs.readlinkSync(nodePath.join(procRoot, String(pid), "fd", "1"));
+      const comm = fs.readFileSync(nodePath.join(procRoot, String(pid), "comm"), "utf8").trim();
+      if (comm === "agy" && LOG.test(target)) return target;
+    } catch { /* process gone or unreadable */ }
+    try {
+      for (const tid of fs.readdirSync(nodePath.join(procRoot, String(pid), "task"))) {
+        for (const child of fs.readFileSync(nodePath.join(procRoot, String(pid), "task", tid, "children"), "utf8").split(/\s+/)) {
+          if (/^\d+$/.test(child)) queue.push(Number(child));
+        }
+      }
+    } catch { /* no children */ }
+  }
+  return null;
 }
 
 export type AgyPromptWait =

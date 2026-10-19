@@ -32,7 +32,7 @@ import {
   type AgyPosture, type AgyRunnerState,
 } from "./agy-runner-protocol.js";
 import {
-  agyInteractiveStatePath, defaultAgyConversationStore, findAgyConversation, parseAgyInteractiveState, resolveAgySeatMode, waitForAgyPrompt,
+  agyInteractiveStatePath, defaultAgyConversationStore, findAgyConversation, findAgyLogPath, parseAgyInteractiveState, resolveAgySeatMode, waitForAgyPrompt,
   type AgyConversationStore,
 } from "./agy-interactive.js";
 
@@ -348,7 +348,10 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
     if (!textResult.ok) return { ok: false, error: `Failed to send launch command: ${textResult.message}` };
 
     const wait = await waitForAgyPrompt(this.tmux, sessionName, this.sleep);
-    if (wait.ok) return { ok: true, appliedLaunch };
+    if (wait.ok) {
+      await this.recordAgyLogPath(sessionName, conversationId);
+      return { ok: true, appliedLaunch };
+    }
     if (wait.kind === "trust") {
       return {
         ok: false,
@@ -361,6 +364,18 @@ export class AgyRuntimeAdapter implements RuntimeAdapter {
       return { ok: false, error: "agy launch failed: the pane returned to a shell before agy showed its prompt", recovery: "attention_required", evidence: wait.evidence };
     }
     return { ok: false, error: "agy launch: timed out waiting for agy to show its prompt", recovery: "attention_required" };
+  }
+
+  /** Notes which agy log belongs to this seat, so its conversation can be named even when seats start together. */
+  private async recordAgyLogPath(sessionName: string, conversationId?: string): Promise<void> {
+    try {
+      const pid = await this.tmux.getPanePid?.(sessionName);
+      const logPath = pid ? findAgyLogPath(pid) : null;
+      if (!logPath) return;
+      const path = agyInteractiveStatePath(this.stateRoot, sessionName);
+      const current = parseAgyInteractiveState(this.fs.readFile(path));
+      if (current) this.fs.writeFile(path, JSON.stringify({ ...current, ...(conversationId ? { conversationId } : {}), logPath }));
+    } catch { /* the launch-time guess still works for a seat that starts alone */ }
   }
 
   private async checkInteractiveReady(sessionName: string, atShell: boolean): Promise<ReadinessResult> {
