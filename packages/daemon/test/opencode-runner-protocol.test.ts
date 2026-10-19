@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  acpTextPrompt, buildOpencodeChildArgs, buildOpencodeChildEnv, buildOpencodePostureConfig, buildOpencodeRunnerCommand,
+  acpTextPrompt, buildOpencodeChildArgs, buildOpencodeChildEnv, buildOpencodePostureConfig, buildOpencodeRunnerCommand, readOperatorOpencodePermission,
   buildPendingOpencodeRunnerState, encodeAcpError, encodeAcpNotification, encodeAcpRequest, encodeAcpResult,
   isOpencodeModelId, isOpencodeSessionId, opencodeSeatPaths, parseOpencodeRunnerState,
 } from "../src/adapters/opencode-runner-protocol.js";
@@ -45,9 +45,26 @@ describe("opencode runner protocol", () => {
 
   describe("posture config", () => {
     it("asks for edits and commands on floor, commands only on auto, nothing on bypass", () => {
-      expect(buildOpencodePostureConfig("floor")).toEqual({ permission: { edit: "ask", bash: "ask" } });
-      expect(buildOpencodePostureConfig("auto")).toEqual({ permission: { edit: "allow", bash: "ask" } });
+      expect(buildOpencodePostureConfig("floor")).toEqual({ permission: { edit: { "*": "ask" }, bash: { "*": "ask" } } });
+      expect(buildOpencodePostureConfig("auto")).toEqual({ permission: { edit: "allow", bash: { "*": "ask" } } });
       expect(buildOpencodePostureConfig("full_bypass")).toBeNull();
+    });
+    it("keeps the operator's saved pattern rules after the catch-all, so the last match is theirs", () => {
+      const operator = { bash: { "git status*": "allow", "*": "allow", "rm *": "deny", "x": "bogus" }, edit: "allow" };
+      const floor = buildOpencodePostureConfig("floor", operator)!.permission;
+      expect(floor.bash).toEqual({ "*": "ask", "git status*": "allow", "rm *": "deny" });
+      expect(Object.keys(floor.bash as object)[0]).toBe("*");
+      expect(floor.edit).toEqual({ "*": "ask" });
+      expect(buildOpencodePostureConfig("auto", operator)!.permission.edit).toBe("allow");
+      expect(buildOpencodePostureConfig("full_bypass", operator)).toBeNull();
+    });
+    it("reads the operator permission block from JSONC, and a broken file yields none", () => {
+      const jsonc = '{\n // note\n "instructions": ["/a//b"],\n "permission": { "bash": { "rg *": "allow", }, },\n}';
+      const read = (text: string | null) => readOperatorOpencodePermission({ HOME: "/h" }, () => text);
+      expect(read(jsonc)).toEqual({ bash: { "rg *": "allow" } });
+      expect(read("{ not json")).toBeUndefined();
+      expect(read(null)).toBeUndefined();
+      expect(readOperatorOpencodePermission({}, () => jsonc)).toBeUndefined();
     });
   });
 
@@ -91,7 +108,7 @@ describe("opencode runner protocol", () => {
     });
     it("injects the posture as inline config, and an inherited config cannot loosen it", () => {
       const floor = buildOpencodeChildEnv({ OPENCODE_CONFIG_CONTENT: '{"permission":{"bash":"allow"}}' }, { sessionName: "s", posture: "floor" });
-      expect(JSON.parse(floor.OPENCODE_CONFIG_CONTENT!)).toEqual({ permission: { edit: "ask", bash: "ask" } });
+      expect(JSON.parse(floor.OPENCODE_CONFIG_CONTENT!)).toEqual({ permission: { edit: { "*": "ask" }, bash: { "*": "ask" } } });
       const bypass = buildOpencodeChildEnv({ OPENCODE_CONFIG_CONTENT: '{"permission":{"bash":"deny"}}' }, { sessionName: "s", posture: "full_bypass" });
       expect(bypass.OPENCODE_CONFIG_CONTENT).toBeUndefined();
     });
