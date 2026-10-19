@@ -2,6 +2,7 @@
 // command construction, launch-scoped sidecar readiness, token capture, posture, projection
 // and startup delivery are all fake-backed. The live leg is the dev-team seat test.
 
+import { agyInteractiveStatePath, resolveAgySeatMode } from "../src/adapters/agy-interactive.js";
 import { describe, it, expect, vi } from "vitest";
 import type { TmuxAdapter, TmuxResult } from "../src/adapters/tmux.js";
 import { AgyRuntimeAdapter, agyEffort, resolveAgyPosture, type AgyAdapterFsOps } from "../src/adapters/agy-runtime-adapter.js";
@@ -434,6 +435,152 @@ describe("AgyResumeAdapter", () => {
     expect(tmux.sendShellCommand).not.toHaveBeenCalled();
     const failing = mockTmux({ sendShellCommand: vi.fn(async () => ({ ok: false as const, code: "x", message: "no pane" })) });
     expect(await resumeWith(memFs(), failing).resume(SESSION, "agy_conversation_id", CONV, "/work")).toMatchObject({ ok: false, message: "no pane" });
+  });
+});
+
+
+describe("agy interactive mode (OPENRIG_AGY_MODE=interactive)", () => {
+  const withMode = async (fn: () => Promise<void>) => {
+    const prior = process.env.OPENRIG_AGY_MODE;
+    process.env.OPENRIG_AGY_MODE = "interactive";
+    try { await fn(); } finally { if (prior === undefined) delete process.env.OPENRIG_AGY_MODE; else process.env.OPENRIG_AGY_MODE = prior; }
+  };
+
+  it("resolves the mode from the environment, headless by default", async () => {
+    const { resolveAgyMode } = await import("../src/adapters/agy-runner-protocol.js");
+    expect(resolveAgyMode({})).toBe("headless");
+    expect(resolveAgyMode({ OPENRIG_AGY_MODE: "Interactive" })).toBe("interactive");
+    expect(resolveAgyMode({ OPENRIG_AGY_MODE: "bogus" })).toBe("headless");
+  });
+
+  it("builds the plain agy command: no runner, posture and resume flags only", async () => {
+    const { buildAgyInteractiveCommand } = await import("../src/adapters/agy-runner-protocol.js");
+    expect(buildAgyInteractiveCommand({ posture: "floor" })).toBe("agy");
+    expect(buildAgyInteractiveCommand({ posture: "full_bypass", model: "m", effort: "high", conversationId: CONV }))
+      .toBe(`agy --dangerously-skip-permissions --model 'm' --effort 'high' --conversation '${CONV}'`);
+    expect(buildAgyInteractiveCommand({ posture: "auto" })).toBe("agy --mode auto");
+  });
+
+  it("launches agy itself and is ready when the console shows its prompt", () => withMode(async () => {
+    const tmux = mockTmux({ capturePaneContent: vi.fn(async () => "> \n? for shortcuts   Gemini 3.8 Flash") });
+    const result = await adapterWith(memFs(), tmux).launchHarness(binding(), { name: "x" });
+    expect(result.ok).toBe(true);
+    expect(tmux.sendShellCommand.mock.calls[0]![1]).toBe("agy");
+    expect(tmux.sendShellCommand.mock.calls[0]![1]).not.toContain("agy-runner");
+  }));
+
+  it("stops with attention_required on the folder-trust prompt", () => withMode(async () => {
+    const tmux = mockTmux({ capturePaneContent: vi.fn(async () => "Do you trust the contents of this project?\n> Yes, I trust this folder") });
+    const result = await adapterWith(memFs(), tmux).launchHarness(binding(), { name: "x" });
+    expect(result).toMatchObject({ ok: false, recovery: "attention_required" });
+    expect((result as { error: string }).error).toContain("trustedWorkspaces");
+  }));
+
+  it("fails fast when the pane falls back to a shell", () => withMode(async () => {
+    const tmux = mockTmux({ getPaneCommand: vi.fn(async () => "bash") });
+    const result = await adapterWith(memFs(), tmux).launchHarness(binding(), { name: "x" });
+    expect(result).toMatchObject({ ok: false, recovery: "attention_required" });
+  }));
+
+  it("checkReady reads the pane, not a sidecar", () => withMode(async () => {
+    const up = mockTmux({ getPaneCommand: vi.fn(async () => "agy"), capturePaneContent: vi.fn(async () => "? for shortcuts") });
+    expect(await adapterWith(memFs(), up).checkReady(binding())).toEqual({ ready: true });
+    const atShell = mockTmux({ getPaneCommand: vi.fn(async () => "-zsh") });
+    expect(await adapterWith(memFs(), atShell).checkReady(binding())).toMatchObject({ ready: false, code: "runner_exited" });
+  }));
+
+  describe("conversation id capture", () => {
+    const store = (files: Array<[string, number]>) => ({
+      dir: "/conv",
+      list: () => files.map(([name, createdMs]) => ({ name, createdMs })),
+    });
+    const adapterWithStore = (fs: AgyAdapterFsOps, tmux: TmuxAdapter, s: ReturnType<typeof store>) =>
+      new AgyRuntimeAdapter({ tmux, fsOps: fs, stateRoot: STATE_ROOT, runnerEntryPath: RUNNER, sleep: async () => {}, conversations: s });
+    const launched = async (fs: ReturnType<typeof memFs>, s: ReturnType<typeof store>) => {
+      const adapter = adapterWithStore(fs, mockTmux({ capturePaneContent: vi.fn(async () => "? for shortcuts") }), s);
+      await adapter.launchHarness(binding(), { name: "x" });
+      return adapter;
+    };
+    const at = () => JSON.parse(Object.entries(memoryFiles).find(([k]) => k.endsWith("interactive.json"))![1]).launchedAtMs as number;
+    let memoryFiles: Record<string, string> = {};
+
+    it("has no id before the first turn, then takes the one conversation created after launch", () => withMode(async () => {
+      const fs = memFs(); memoryFiles = fs.files;
+      const files: Array<[string, number]> = [[`${OTHER}.db`, 1000]];
+      const s = store(files);
+      const adapter = await launched(fs, s);
+      expect(adapter.readSessionFile(SESSION)).toEqual({ ok: false, reason: "missing_sidecar" });
+      files.push([`${CONV}.db`, at() + 5000]);
+      expect(adapter.readSessionFile(SESSION)).toEqual({ ok: true, sessionFile: CONV });
+    }));
+
+    it("reports none when two conversations appeared, rather than guess", () => withMode(async () => {
+      const fs = memFs(); memoryFiles = fs.files;
+      const files: Array<[string, number]> = [];
+      const adapter = await launched(fs, store(files));
+      files.push([`${CONV}.db`, at() + 10], [`${OTHER}.db`, at() + 20], ["notes.txt", at() + 30]);
+      expect(adapter.readSessionFile(SESSION)).toEqual({ ok: false, reason: "ambiguous" });
+    }));
+
+    it("uses the id it was resumed on, without scanning", () => withMode(async () => {
+      const fs = memFs(); memoryFiles = fs.files;
+      const adapter = adapterWithStore(fs, mockTmux({ capturePaneContent: vi.fn(async () => "? for shortcuts") }), store([[`${OTHER}.db`, 9e15]]));
+      await adapter.launchHarness(binding(), { name: "x", resumeToken: CONV });
+      expect(adapter.readSessionFile(SESSION)).toEqual({ ok: true, sessionFile: CONV });
+    }));
+
+    it("goes back to the runner sidecar after a headless launch", async () => {
+      const fs = memFs(); memoryFiles = fs.files;
+      fs.files[agyInteractiveStatePath(STATE_ROOT, SESSION)] = JSON.stringify({ mode: "interactive", launchedAtMs: 1 });
+      const tmux = runnerThatWrites(fs, (id) => JSON.stringify({ launchId: id, ready: true, conversationId: CONV, updatedAt: "t" }));
+      const adapter = adapterWithStore(fs, tmux, store([]));
+      await adapter.launchHarness(binding(), { name: "x" });
+      expect(adapter.readSessionFile(SESSION)).toEqual({ ok: true, sessionFile: CONV });
+    });
+  });
+
+  describe("resume", () => {
+    const resumer = (tmux: TmuxAdapter, fs = memFs()) =>
+      new AgyResumeAdapter(tmux, fs, { stateRoot: STATE_ROOT, runnerEntryPath: RUNNER }, { sleep: async () => {} });
+
+    it("restarts agy on the saved conversation and proves it by the console prompt", () => withMode(async () => {
+      const tmux = mockTmux({ capturePaneContent: vi.fn(async () => "? for shortcuts") });
+      const fs = memFs();
+      const result = await resumer(tmux, fs).resume(SESSION, "agy_conversation_id", CONV, "/work");
+      expect(result.ok).toBe(true);
+      expect(tmux.sendShellCommand.mock.calls[0]![1]).toBe(`agy --conversation '${CONV}'`);
+      expect(JSON.parse(fs.files[agyInteractiveStatePath(STATE_ROOT, SESSION)]!)).toMatchObject({ mode: "interactive", conversationId: CONV });
+    }));
+
+    it("fails honestly when the pane goes back to a shell", () => withMode(async () => {
+      const tmux = mockTmux({ getPaneCommand: vi.fn(async () => "bash") });
+      expect(await resumer(tmux).resume(SESSION, "agy_conversation_id", CONV, "/work")).toMatchObject({ ok: false, code: "resume_failed" });
+    }));
+  });
+
+  describe("per-seat mode (the seat's own env in the rig spec)", () => {
+    const seatEnv = (value: string | undefined) => ({ getSessionEnv: vi.fn(async () => value) });
+    const daemon = (v?: string): NodeJS.ProcessEnv => (v ? { OPENRIG_AGY_MODE: v } : {});
+
+    it("a seat that sets interactive is interactive even when the daemon is headless", async () => {
+      expect(await resolveAgySeatMode(seatEnv("interactive"), SESSION, daemon())).toBe("interactive");
+    });
+    it("a seat that sets headless stays headless under an interactive daemon", async () => {
+      expect(await resolveAgySeatMode(seatEnv("headless"), SESSION, daemon("interactive"))).toBe("headless");
+    });
+    it("a seat with nothing set, or an unreadable session env, follows the daemon", async () => {
+      expect(await resolveAgySeatMode(seatEnv(undefined), SESSION, daemon("interactive"))).toBe("interactive");
+      expect(await resolveAgySeatMode(seatEnv(""), SESSION, daemon())).toBe("headless");
+      expect(await resolveAgySeatMode({ getSessionEnv: async () => { throw new Error("x"); } }, SESSION, daemon("interactive"))).toBe("interactive");
+      expect(await resolveAgySeatMode({}, SESSION, daemon())).toBe("headless");
+    });
+    it("launches interactively from the seat's env alone (no daemon setting)", async () => {
+      const tmux = mockTmux({ capturePaneContent: vi.fn(async () => "? for shortcuts") });
+      (tmux as unknown as { getSessionEnv: unknown }).getSessionEnv = vi.fn(async () => "interactive");
+      const result = await adapterWith(memFs(), tmux).launchHarness(binding(), { name: "x" });
+      expect(result.ok).toBe(true);
+      expect(tmux.sendShellCommand.mock.calls[0]![1]).toBe("agy");
+    });
   });
 });
 

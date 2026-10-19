@@ -1372,6 +1372,10 @@ export async function attachAgentActivity(
     const withMotion = (activity: AgentActivity): AgentActivity => {
       if (!motionRunning) return activity;
       if (activity.state !== "idle" && activity.state !== "unknown") return activity;
+      // agy's own console repaints while it waits at its empty prompt (the frame is identical, the
+      // window still counts bytes), so motion cannot tell it from work. Its pane reading is specific
+      // (idle footer, `esc to cancel` while running) and is trusted over motion.
+      if (entry.runtime === "agy" && activity.state === "idle" && activity.evidenceSource === "pane_heuristic") return activity;
       return {
         state: "running",
         reason: "window_activity_motion",

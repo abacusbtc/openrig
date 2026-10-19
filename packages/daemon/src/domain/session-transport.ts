@@ -58,6 +58,9 @@ const MID_WORK_PATTERNS = [
   /Working/,
   /^[✶✢✳✻✽·]\s+\S.*(?:…|\.{3})\s+\([^)]*\bthinking\)$/m,
   /esc to interrupt/,
+  // agy's console while a turn runs: `⣽  Generating...` above a footer reading `esc to cancel`.
+  /esc to cancel/,
+  /[\u2800-\u28FF]\s+Generating\.\.\./,
   COMPOSER_SELECTION_SCAN_PATTERN,   // trust/consent prompt choices (e.g. '› 1. Yes, continue')
 ];
 
@@ -96,6 +99,7 @@ const CLAUDE_PERMISSION_MODE_FOOTER = /(?:-- [A-Z]+ -- )?(?:⏵⏵ (?:accept edi
 const IDLE_STATUS_BAR_PATTERNS = [
   /gpt-\d[\d.]* .+ · Context \[/,  // Codex model/context footer
   CLAUDE_PERMISSION_MODE_FOOTER,   // Claude Code mode footers (#808)
+  /^\? for shortcuts\s{2,}.+ · (?:low|medium|high|xhigh|max)\s*$/, // agy: hint, model and effort
 ];
 
 const IDLE_TERMINAL_COMMANDS = new Set(["zsh", "bash", "sh", "fish", "nu", "tmux"]);
@@ -112,6 +116,9 @@ const PERMISSION_PROMPT_PATTERNS = [
   // (`› N.`) is already caught above; these question lines make the fallback robust if it scrolls out.
   /\bWould you like to run the following command\b/i,
   /\bAllow Codex to run\b/i,
+  // agy's in-pane approval prompts (the persist option is the one that writes settings.json).
+  /\bAllow access to this file\?/,
+  /\bYes, and always allow\b/,
 ];
 
 // OPR.0.4.1.10 — how many trailing non-blank lines to scan for an interactive-prompt SIGNATURE (the

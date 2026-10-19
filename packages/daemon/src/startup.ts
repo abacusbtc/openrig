@@ -51,6 +51,7 @@ import { OmpResumeAdapter } from "./adapters/omp-resume.js";
 import { AgyRuntimeAdapter } from "./adapters/agy-runtime-adapter.js";
 import { OpencodeRuntimeAdapter } from "./adapters/opencode-runtime-adapter.js";
 import { AgyResumeAdapter } from "./adapters/agy-resume.js";
+import { AgyInteractiveTokenService } from "./domain/agy-interactive-token-service.js";
 import { OpencodeResumeAdapter } from "./adapters/opencode-resume.js";
 import { OMP_PROVIDER_ENV_VARS, OMP_PROVIDER_EXTRA_ENV_VARS } from "./adapters/pi-runner-protocol.js";
 import { RigSpecExporter } from "./domain/rigspec-exporter.js";
@@ -855,6 +856,8 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
   // agy (Antigravity CLI): runner-in-a-pane over stream-json. Unlike OMP it keeps the operator's HOME
   // (the OAuth login lives there); seat state roots under agyStateRoot.
   const agyAdapter = new AgyRuntimeAdapter({ tmux: tmuxAdapter, seatLaunchEnvironment, fsOps: { readFile: (p: string) => fs.readFileSync(p, "utf-8"), writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"), exists: (p: string) => fs.existsSync(p), mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }), listFiles: (dir: string) => { const r: string[] = []; /** Collect relative file paths recursively. */ function w(d: string, pre: string) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) w(nodePath.join(d, e.name), nodePath.join(pre, e.name)); else r.push(pre ? nodePath.join(pre, e.name) : e.name); } } w(dir, ""); return r; }, statMode: (p: string) => fs.statSync(p).mode, chmod: (p: string, m: number) => fs.chmodSync(p, m) }, stateRoot: agyStateRoot, runnerEntryPath: agyRunnerEntryPath });
+  // Interactive agy seats learn their conversation id at the first turn; fill it in once it exists.
+  const agyInteractiveTokenService = new AgyInteractiveTokenService({ db, sessionRegistry, reader: agyAdapter });
   const opencodeAdapter = new OpencodeRuntimeAdapter({ tmux: tmuxAdapter, seatLaunchEnvironment, fsOps: { readFile: (p: string) => fs.readFileSync(p, "utf-8"), writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"), exists: (p: string) => fs.existsSync(p), mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }), listFiles: (dir: string) => { const r: string[] = []; /** Collect relative file paths recursively. */ function w(d: string, pre: string) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) w(nodePath.join(d, e.name), nodePath.join(pre, e.name)); else r.push(pre ? nodePath.join(pre, e.name) : e.name); } } w(dir, ""); return r; }, statMode: (p: string) => fs.statSync(p).mode, chmod: (p: string, m: number) => fs.chmodSync(p, m) }, stateRoot: opencodeStateRoot, runnerEntryPath: opencodeRunnerEntryPath });
   // OPR.0.5.1.1 — the stub runtime adapter (Pi-shaped node-script runner in a pane).
   // Same fsOps shape as Pi; the compiled runner entry lives in the daemon dist.
@@ -1337,6 +1340,7 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
     seatActivityService,
     seatStructuralActivityService,
     seatIdentityReconciler,
+    agyInteractiveTokenService,
     // OPR.0.4.4.21 — agentActivity feeds the rig-rollup attention
     // predicate's needs_input signal (synchronous events lookup only).
     psProjectionService: new PsProjectionService({ db, seatActivity: seatActivityService, agentActivity: agentActivityStore }),
