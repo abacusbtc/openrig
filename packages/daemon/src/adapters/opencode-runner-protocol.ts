@@ -252,7 +252,8 @@ export function buildOpencodeRunnerCommand(opts: OpencodeRunnerLaunchOpts): stri
 
 /** Argv for the `opencode` child the RUNNER spawns (argv-style, no shell). */
 export function buildOpencodeChildArgs(opts: { cwd: string }): string[] {
-  return ["acp", "--cwd", opts.cwd];
+  // opencode v2.0.32 `acp` rejects --cwd. The child is spawned with cwd set and ACP session/new carries the cwd, so no flag.
+  return ["acp"];
 }
 
 // ── ACP JSON-RPC encoding ────────────────────────────────────────────────────

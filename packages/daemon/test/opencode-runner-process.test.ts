@@ -60,7 +60,7 @@ describe("opencode-runner process", () => {
     await until(() => sidecar()?.busy === false && !!sidecar()?.lastTurnAt, "turn recorded");
     expect(output).toContain("> hello there");
     expect(spawns()).toHaveLength(1);
-    expect(spawns()[0]!.argv).toEqual(["acp", "--cwd", dir]);
+    expect(spawns()[0]!.argv).toEqual(["acp"]);
   });
 
   it("injects the posture as inline opencode config", async () => {

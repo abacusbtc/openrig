@@ -40,7 +40,7 @@ describe("opencode runner protocol", () => {
   });
 
   it("runs `opencode acp` in the seat's cwd", () => {
-    expect(buildOpencodeChildArgs({ cwd: "/w" })).toEqual(["acp", "--cwd", "/w"]);
+    expect(buildOpencodeChildArgs({ cwd: "/w" })).toEqual(["acp"]);
   });
 
   describe("posture config", () => {
