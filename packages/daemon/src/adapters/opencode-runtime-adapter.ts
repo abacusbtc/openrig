@@ -30,6 +30,10 @@ import {
   opencodeSeatPaths, buildOpencodeRunnerCommand, buildPendingOpencodeRunnerState, isOpencodeModelId, parseOpencodeRunnerState,
   type OpencodePosture, type OpencodeRunnerState,
 } from "./opencode-runner-protocol.js";
+import {
+  OPENCODE_INTERACTIVE_READY_TEXT, buildOpencodeInteractiveCommand, defaultOpencodeSessionDb, findOpencodeSession,
+  opencodeInteractiveStatePath, parseOpencodeInteractiveState, resolveOpencodeSeatMode, waitForOpencodePrompt,
+} from "./opencode-interactive.js";
 
 const SHELL_COMMANDS = new Set(["bash", "fish", "nu", "sh", "tmux", "zsh"]);
 
@@ -93,6 +97,22 @@ export class OpencodeRuntimeAdapter implements RuntimeAdapter {
   /** The runner-sidecar reader shape resume-token-capture consumes. The session id rides in
    *  the `sessionFile` slot, which that interface names for the Pi/OMP token it was built for. */
   readSessionFile(sessionName: string): { ok: true; sessionFile: string } | { ok: false; reason: string } {
+    const interactivePath = opencodeInteractiveStatePath(this.stateRoot, sessionName);
+    if (this.fs.exists(interactivePath)) {
+      let text = "";
+      try {
+        text = this.fs.readFile(interactivePath);
+      } catch {
+        /* unreadable: treated as parse_error below */
+      }
+      // A headless launch overwrites the marker, so a seat switched back to the runner reads its sidecar.
+      if (!text.includes('"headless"')) {
+        const interactive = parseOpencodeInteractiveState(text);
+        if (!interactive) return { ok: false, reason: "parse_error" };
+        const found = findOpencodeSession(interactive, defaultOpencodeSessionDb());
+        return found.ok ? { ok: true, sessionFile: found.sessionId } : { ok: false, reason: found.reason };
+      }
+    }
     const state = this.readRunnerState(sessionName);
     if (state === null) {
       return this.fs.exists(opencodeSeatPaths(this.stateRoot, sessionName).runnerStatePath)
@@ -206,12 +226,19 @@ export class OpencodeRuntimeAdapter implements RuntimeAdapter {
     }
 
     const sessionName = binding.tmuxSession;
+    if ((await resolveOpencodeSeatMode(this.tmux, sessionName)) === "interactive") {
+      return this.launchInteractive(binding, sessionName, model, sessionId);
+    }
     const paths = opencodeSeatPaths(this.stateRoot, sessionName);
     this.fs.mkdirp(paths.seatRoot);
 
     // Launch-attempt scoping: overwrite any stale sidecar with a pending record BEFORE the
     // command is typed, and trust only sidecar states stamped with THIS attempt's launchId.
     const launchId = this.newLaunchId();
+    if (this.fs.exists(opencodeInteractiveStatePath(this.stateRoot, sessionName))) {
+      // A headless launch retires the interactive marker, so the seat reads its runner sidecar again.
+      this.fs.writeFile(opencodeInteractiveStatePath(this.stateRoot, sessionName), JSON.stringify({ mode: "headless" }));
+    }
     const prior = this.readRunnerState(sessionName);
     this.fs.writeFile(
       paths.runnerStatePath,
@@ -269,6 +296,9 @@ export class OpencodeRuntimeAdapter implements RuntimeAdapter {
     const paneCommand = (await this.tmux.getPaneCommand(binding.tmuxSession)) ?? "";
     // A login shell reports its name with a leading dash ("-bash").
     const atShell = SHELL_COMMANDS.has(paneCommand.replace(/^-/, ""));
+    if ((await resolveOpencodeSeatMode(this.tmux, binding.tmuxSession)) === "interactive") {
+      return this.checkInteractiveReady(binding.tmuxSession, atShell);
+    }
     const state = this.readRunnerState(binding.tmuxSession);
     if (state?.exited) {
       return { ready: false, reason: `opencode-runner exited (code ${state.exited.code ?? "unknown"})`, code: "runner_exited" };
@@ -296,6 +326,50 @@ export class OpencodeRuntimeAdapter implements RuntimeAdapter {
       return { ready: true };
     }
     return { ready: false, reason: "opencode-runner has not reported ready yet", code: "awaiting_runtime" };
+  }
+
+  // ── interactive mode ────────────────────────────────────────────────────────
+  /** Fresh or resumed start of opencode's own TUI. Readiness is the pane (opencode is the foreground
+   *  process and shows its input placeholder). There is no runner sidecar, so the launch records
+   *  interactive.json and the session id is found later from opencode's global sqlite store
+   *  (see opencode-interactive.ts). */
+  private async launchInteractive(
+    binding: NodeBinding,
+    sessionName: string,
+    model: string | undefined,
+    sessionId?: string,
+  ): Promise<HarnessLaunchResult> {
+    const posture = resolveOpencodePosture(process.env, binding.launchPosture);
+    const cmd = buildOpencodeInteractiveCommand({ model, sessionId });
+    const appliedLaunch = observeOpencodePermission(posture);
+    this.fs.mkdirp(opencodeSeatPaths(this.stateRoot, sessionName).seatRoot);
+    this.fs.writeFile(
+      opencodeInteractiveStatePath(this.stateRoot, sessionName),
+      JSON.stringify({ mode: "interactive", launchedAtMs: Date.now(), cwd: binding.cwd, ...(sessionId ? { sessionId } : {}) }),
+    );
+    const command = this.seatLaunchEnvironment
+      ? await this.seatLaunchEnvironment.command(sessionName, cmd, { nodeId: binding.nodeId, generation: binding.launchGeneration, runtime: "opencode" })
+      : cmd;
+    let textResult = await this.tmux.sendShellCommand(sessionName, command, undefined, { stageIfLong: true, execInScript: true });
+    if (!textResult.ok && textResult.code === "launch_path_too_long" && command !== cmd) {
+      textResult = await this.tmux.sendShellCommand(sessionName, cmd, undefined, { stageIfLong: true, execInScript: true });
+    }
+    if (!textResult.ok) return { ok: false, error: `Failed to send launch command: ${textResult.message}` };
+
+    const wait = await waitForOpencodePrompt(this.tmux, sessionName, this.sleep);
+    if (wait.ok) return { ok: true, appliedLaunch };
+    if (wait.kind === "shell") {
+      return { ok: false, error: "opencode launch failed: the pane returned to a shell before opencode showed its prompt", recovery: "attention_required", evidence: wait.evidence };
+    }
+    return { ok: false, error: "opencode launch: timed out waiting for opencode to show its prompt", recovery: "attention_required" };
+  }
+
+  private async checkInteractiveReady(sessionName: string, atShell: boolean): Promise<ReadinessResult> {
+    if (atShell) return { ready: false, reason: "opencode is not running; the pane is back at a shell", code: "runner_exited" };
+    const paneContent = (await this.tmux.capturePaneContent(sessionName, 40)) ?? "";
+    return paneContent.includes(OPENCODE_INTERACTIVE_READY_TEXT)
+      ? { ready: true }
+      : { ready: false, reason: "opencode has not shown its prompt yet", code: "awaiting_runtime" };
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
